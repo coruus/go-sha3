@@ -26,12 +26,14 @@ const (
 )
 
 const (
-	bytebufLen = 168
+	bytebufLen = 176
 )
 
 var (
-	errSha3CanOnlySqueezeOnce = errors.New("fixed-output-length functions can only be squeezed once")
-	errSha3DigestTooLong      = errors.New("more output was requested from an SHA-3 fixed-output-length function than it can provide")
+	errSha3CanOnlySqueezeOnce = errors.New(
+		"fixed-output-length functions can only be squeezed once")
+	errSha3DigestTooLong = errors.New(
+		"too much output requested from a fixed-output-length hash")
 )
 
 // digest represents the partial evaluation of a checksum.
@@ -271,5 +273,18 @@ func NewShake256() *digest {
 		fixedOutput: false,
 		outputSize:  512,
 		rate:        200 - (2 * 256 / 8),
+		dsbyte:      0x1f}
+}
+
+// NewShake creates a new SHAKE variable-output-length hash of any
+// desired rate > 0 and < bytebufLen
+func NewShake(rate, outputSize int) *digest {
+	if rate > bytebufLen || rate <= 0 {
+		return nil
+	}
+	return &digest{
+		fixedOutput: false,
+		outputSize:  int(outputSize),
+		rate:        int(rate),
 		dsbyte:      0x1f}
 }
