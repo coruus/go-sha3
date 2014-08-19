@@ -12,36 +12,39 @@
 package sha3
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"hash"
 )
 
-// laneSize is the size in bytes of each "lane" of the internal state of SHA3 (5 * 5 * 8).
-// Note that changing this size would requires using a type other than uint64 to store each lane.
-const laneSize = 8
+type spongeState int
+const (
+	stateAbsorbing spongeState = 0
+	stateSqueezing             = iota
+	stateSqueezed
+)
 
-// sliceSize represents the dimensions of the internal state, a square matrix of
-// sliceSize ** 2 lanes. This is the size of both the "rows" and "columns" dimensions in the
-// terminology of the SHA3 specification.
-const sliceSize = 5
+const (
+	bytebufLen = 168
+)
 
-// numLanes represents the total number of lanes in the state.
-const numLanes = sliceSize * sliceSize
-
-// stateSize is the size in bytes of the internal state of SHA3 (5 * 5 * WSize).
-const stateSize = laneSize * numLanes
+var (
+	errSha3CanOnlySqueezeOnce = errors.New("fixed-output-length functions can only be squeezed once")
+	errSha3DigestTooLong      = errors.New("more output was requested from an SHA-3 fixed-output-length function than it can provide")
+)
 
 // digest represents the partial evaluation of a checksum.
-// Note that capacity, and not outputSize, is the critical security parameter, as SHA3 can output
-// an arbitrary number of bytes for any given capacity. The Keccak proposal recommends that
-// capacity = 2*outputSize to ensure that finding a collision of size outputSize requires
-// O(2^{outputSize/2}) computations (the birthday lower bound). Future standards may modify the
-// capacity/outputSize ratio to allow for more output with lower cryptographic security.
 type digest struct {
-	a          [numLanes]uint64 // main state of the hash
-	outputSize int              // desired output size in bytes
-	capacity   int              // number of bytes to leave untouched during squeeze/absorb
-	absorbed   int              // number of bytes absorbed thus far
+	hash.Hash
+	a           [25]uint64       // main state of the hash
+	outputSize  int              // desired output size in bytes
+	bytebuf     [bytebufLen]byte // the input buffer (max rate == 168)
+	rate        int              // the maximum number of bytes to touch in the state
+	position    int              // position in the input buffer
+	state       spongeState      // current state of the sponge (absorbing or squeezing)
+	dsbyte      byte             // the domain separator byte
+	fixedOutput bool             // whether this is a fixed-ouput-length instance
 }
 
 // minInt returns the lesser of two integer arguments, to simplify the absorption routine.
@@ -52,19 +55,27 @@ func minInt(v1, v2 int) int {
 	return v2
 }
 
-// rate returns the number of bytes of the internal state which can be absorbed or squeezed
-// in between calls to the permutation function.
-func (d *digest) rate() int {
-	return stateSize - d.capacity
+func (d *digest) SpongeSize() int {
+	return 200
+}
+
+// SecurityStrength returns the generic security strength (in bits) of this
+// sponge instance.
+func (d *digest) SecurityStrength() int {
+	return 8 * (200 - (d.rate / 2))
 }
 
 // Reset clears the internal state by zeroing bytes in the state buffer.
 // This can be skipped for a newly-created hash state; the default zero-allocated state is correct.
 func (d *digest) Reset() {
-	d.absorbed = 0
+	d.position = 0
 	for i := range d.a {
 		d.a[i] = 0
 	}
+	for i := range d.bytebuf {
+		d.bytebuf[i] = 0
+	}
+	d.state = stateAbsorbing
 }
 
 // BlockSize, required by the hash.Hash interface, does not have a standard intepretation
@@ -73,141 +84,197 @@ func (d *digest) Reset() {
 // (ie SHA1, SHA2, MD5) the output size of the internal compression function is returned.
 // We consider this to be roughly equivalent because it represents the number of bytes of output
 // produced per cryptographic operation.
-func (d *digest) BlockSize() int { return d.rate() }
+func (d *digest) BlockSize() int { return d.rate }
 
 // Size returns the output size of the hash function in bytes.
 func (d *digest) Size() int {
 	return d.outputSize
 }
 
-// unalignedAbsorb is a helper function for Write, which absorbs data that isn't aligned with an
-// 8-byte lane. This requires shifting the individual bytes into position in a uint64.
-func (d *digest) unalignedAbsorb(p []byte) {
-	var t uint64
-	for i := len(p) - 1; i >= 0; i-- {
-		t <<= 8
-		t |= uint64(p[i])
+// xorInBytes xors the input buffer into the state, performing a byte-swap if
+// necessary
+func (d *digest) xorFromBytebuf() {
+	temp := make([]uint64, 21)
+	buf := bytes.NewBuffer(d.bytebuf[:])
+	binary.Read(buf, binary.LittleEndian, temp)
+	for i, ai := range temp {
+		d.a[i] ^= ai
 	}
-	offset := (d.absorbed) % d.rate()
-	t <<= 8 * uint(offset%laneSize)
-	d.a[offset/laneSize] ^= t
-	d.absorbed += len(p)
+	d.position = 0
+	for i := range d.bytebuf {
+		d.bytebuf[i] = 0
+	}
 }
 
-// Write "absorbs" bytes into the state of the SHA3 hash, updating as needed when the sponge
-// "fills up" with rate() bytes. Since lanes are stored internally as type uint64, this requires
-// converting the incoming bytes into uint64s using a little endian interpretation. This
-// implementation is optimized for large, aligned writes of multiples of 8 bytes (laneSize).
-// Non-aligned or uneven numbers of bytes require shifting and are slower.
-func (d *digest) Write(p []byte) (int, error) {
-	// An initial offset is needed if the we aren't absorbing to the first lane initially.
-	offset := d.absorbed % d.rate()
-	toWrite := len(p)
-
-	// The first lane may need to absorb unaligned and/or incomplete data.
-	if (offset%laneSize != 0 || len(p) < 8) && len(p) > 0 {
-		toAbsorb := minInt(laneSize-(offset%laneSize), len(p))
-		d.unalignedAbsorb(p[:toAbsorb])
-		p = p[toAbsorb:]
-		offset = (d.absorbed) % d.rate()
-
-		// For every rate() bytes absorbed, the state must be permuted via the F Function.
-		if (d.absorbed)%d.rate() == 0 {
-			keccakF(&d.a)
-		}
+// copyToBytebuf copies from the sponge state to the output buffer
+func (d *digest) copyToBytebuf() {
+	for i := 0; i < 21; i++ {
+		binary.LittleEndian.PutUint64(d.bytebuf[i*8:(i+1)*8], d.a[i])
 	}
-
-	// This loop should absorb the bulk of the data into full, aligned lanes.
-	// It will call the update function as necessary.
-	for len(p) > 7 {
-		firstLane := offset / laneSize
-		lastLane := minInt(d.rate()/laneSize, firstLane+len(p)/laneSize)
-
-		// This inner loop absorbs input bytes into the state in groups of 8, converted to uint64s.
-		for lane := firstLane; lane < lastLane; lane++ {
-			d.a[lane] ^= binary.LittleEndian.Uint64(p[:laneSize])
-			p = p[laneSize:]
-		}
-		d.absorbed += (lastLane - firstLane) * laneSize
-		// For every rate() bytes absorbed, the state must be permuted via the F Function.
-		if (d.absorbed)%d.rate() == 0 {
-			keccakF(&d.a)
-		}
-
-		offset = 0
-	}
-
-	// If there are insufficient bytes to fill the final lane, an unaligned absorption.
-	// This should always start at a correct lane boundary though, or else it would be caught
-	// by the uneven opening lane case above.
-	if len(p) > 0 {
-		d.unalignedAbsorb(p)
-	}
-
-	return toWrite, nil
 }
 
-// pad computes the SHA3 padding scheme based on the number of bytes absorbed.
-// The padding is a 1 bit, followed by an arbitrary number of 0s and then a final 1 bit, such that
-// the input bits plus padding bits are a multiple of rate(). Adding the padding simply requires
-// xoring an opening and closing bit into the appropriate lanes.
-func (d *digest) pad() {
-	offset := d.absorbed % d.rate()
-	// The opening pad bit must be shifted into position based on the number of bytes absorbed
-	padOpenLane := offset / laneSize
-	d.a[padOpenLane] ^= 0x0000000000000001 << uint(8*(offset%laneSize))
-	// The closing padding bit is always in the last position
-	padCloseLane := (d.rate() / laneSize) - 1
-	d.a[padCloseLane] ^= 0x8000000000000000
-}
-
-// finalize prepares the hash to output data by padding and one final permutation of the state.
-func (d *digest) finalize() {
-	d.pad()
+// Apply the permutation.
+func (d *digest) permute() {
 	keccakF(&d.a)
 }
 
-// squeeze outputs an arbitrary number of bytes from the hash state.
-// Squeezing can require multiple calls to the F function (one per rate() bytes squeezed),
-// although this is not the case for standard SHA3 parameters. This implementation only supports
-// squeezing a single time, subsequent squeezes may lose alignment. Future implementations
-// may wish to support multiple squeeze calls, for example to support use as a PRNG.
-func (d *digest) squeeze(in []byte, toSqueeze int) []byte {
-	// Because we read in blocks of laneSize, we need enough room to read
-	// an integral number of lanes
-	needed := toSqueeze + (laneSize-toSqueeze%laneSize)%laneSize
-	if cap(in)-len(in) < needed {
-		newIn := make([]byte, len(in), len(in)+needed)
-		copy(newIn, in)
-		in = newIn
-	}
-	out := in[len(in) : len(in)+needed]
+// Write "absorbs" bytes into the state of the SHA3 hash, updating as needed
+// when the sponge "fills up" with rate bytes.
+// TODO(dlg): how to handle writing into a closed-out sponge instance? (This isn't
+// a problem if only the hash.Hash interface is used, but it would be nice to
+// support hash-and-continue.)
+func (d *digest) Write(p []byte) (inputOffset int, err error) {
+	toWrite := len(p)
+	inputOffset = 0
+	for toWrite > 0 {
+		canWrite := d.rate - d.position
+		willWrite := minInt(toWrite, canWrite)
 
-	for len(out) > 0 {
-		for i := 0; i < d.rate() && len(out) > 0; i += laneSize {
-			binary.LittleEndian.PutUint64(out[:], d.a[i/laneSize])
-			out = out[laneSize:]
+		copy(d.bytebuf[d.position:], p[inputOffset:inputOffset+willWrite])
+		d.position += willWrite
+		if d.position == d.rate {
+			d.xorFromBytebuf()
+			d.permute()
 		}
-		if len(out) > 0 {
-			keccakF(&d.a)
-		}
+		toWrite -= willWrite
+		inputOffset += willWrite
 	}
-	return in[:len(in)+toSqueeze] // Re-slice in case we wrote extra data.
+	return int(inputOffset), nil
 }
 
-// Sum applies padding to the hash state and then squeezes out the desired nubmer of output bytes.
+// pad applies the SHA3 padding scheme based on the number of bytes absorbed.
+func (d *digest) pad() {
+	d.bytebuf[d.position] ^= d.dsbyte
+	d.bytebuf[d.rate-1] ^= 0x80
+}
+
+// finalize prepares the hash to output data by applying the padding,
+// xoring the last block into the state, applying the permutation, and
+// copying the first buffer-length of output.
+func (d *digest) finalize() {
+	d.pad()
+	d.xorFromBytebuf()
+	d.permute()
+	d.copyToBytebuf()
+	d.state = stateSqueezing
+}
+
+// Squeeze outputs an arbitrary number of bytes from the hash state.
+// Squeezing can require multiple calls to the F function (one per rate() bytes
+// squeezed).
+func (d *digest) Squeeze(in []byte, toSqueeze int) (out []byte, err error) {
+	// Check that the sponge is in the correct state.
+	switch d.state {
+	case stateAbsorbing:
+		// If we're still absorbing, pad and apply the permutation.
+		d.finalize()
+		d.state = stateSqueezing
+	case stateSqueezed:
+		// This only gets set for the FOFs.
+		return nil, errSha3CanOnlySqueezeOnce
+	}
+
+	if d.fixedOutput {
+		if toSqueeze > d.outputSize {
+			return nil, errSha3DigestTooLong
+		}
+		// Set to prevent another call.
+		d.state = stateSqueezed
+	}
+
+	// Now, do the squeezing.
+	out = make([]byte, toSqueeze)
+	outOffset := 0
+	for toSqueeze != 0 {
+		canSqueeze := d.rate - d.position
+		willSqueeze := minInt(toSqueeze, canSqueeze)
+
+		// Copy the output from the sponge's buffer
+		copy(out[outOffset:outOffset+willSqueeze], d.bytebuf[d.position:d.position+willSqueeze])
+
+		d.position += willSqueeze
+		outOffset += willSqueeze
+		toSqueeze -= willSqueeze
+
+		// Apply the permutation when we've used up "rate" bytes.
+		if d.position == d.rate {
+			d.permute()
+			d.copyToBytebuf()
+			d.position = 0
+		}
+
+	}
+	return append(in, out...), nil // Re-slice in case we wrote extra data.
+}
+
+// Sum applies padding to the hash state and then squeezes out the desired number of output bytes.
 func (d *digest) Sum(in []byte) []byte {
 	// Make a copy of the original hash so that caller can keep writing and summing.
 	dup := *d
-	dup.finalize()
-	return dup.squeeze(in, dup.outputSize)
+	out, err := dup.Squeeze(in, dup.outputSize)
+	if err != nil {
+		panic("this should not be possible")
+	}
+	// TODO: how should errors be handled?
+	return out
 }
 
 // The NewKeccakX constructors enable initializing a hash in any of the four recommend sizes
 // from the Keccak specification, all of which set capacity=2*outputSize. Note that the final
 // NIST standard for SHA3 may specify different input/output lengths.
 // The output size is indicated in bits but converted into bytes internally.
-func NewKeccak224() hash.Hash { return &digest{outputSize: 224 / 8, capacity: 2 * 224 / 8} }
-func NewKeccak256() hash.Hash { return &digest{outputSize: 256 / 8, capacity: 2 * 256 / 8} }
-func NewKeccak384() hash.Hash { return &digest{outputSize: 384 / 8, capacity: 2 * 384 / 8} }
-func NewKeccak512() hash.Hash { return &digest{outputSize: 512 / 8, capacity: 2 * 512 / 8} }
+
+// New224 creates a new SHA3-224 hash
+func New224() *digest {
+	d := &digest{
+		outputSize:  224 / 8,
+		fixedOutput: true,
+		rate:        200 - (2 * 224 / 8),
+		dsbyte:      0x06}
+	return d
+}
+
+// New256 creates a new SHA3-224 hash
+func New256() *digest {
+	return &digest{
+		outputSize:  256 / 8,
+		fixedOutput: true,
+		rate:        200 - (2 * 256 / 8),
+		dsbyte:      0x06}
+}
+
+// New384 creates a new SHA3-384 hash
+func New384() *digest {
+	return &digest{
+		outputSize:  384 / 8,
+		fixedOutput: true,
+		rate:        200 - (2 * 384 / 8),
+		dsbyte:      0x06}
+}
+
+// New512 creates a new SHA3-512 hash
+func New512() *digest {
+	return &digest{
+		outputSize:  512 / 8,
+		fixedOutput: true,
+		rate:        200 - (2 * 512 / 8),
+		dsbyte:      0x06}
+}
+
+// NewShake128 creates a new SHAKE128 variable-output-length hash
+func NewShake128() *digest {
+	return &digest{
+		fixedOutput: false,
+		outputSize:  512,
+		rate:        200 - (2 * 128 / 8),
+		dsbyte:      0x1f}
+}
+
+// NewShake256 creates a new SHAKE128 variable-output-length hash
+func NewShake256() *digest {
+	return &digest{
+		fixedOutput: false,
+		outputSize:  512,
+		rate:        200 - (2 * 256 / 8),
+		dsbyte:      0x1f}
+}
