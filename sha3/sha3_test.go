@@ -304,3 +304,29 @@ func BenchmarkBulkSha3_256(b *testing.B) { benchmarkBulkHash(b, New256()) }
 func BenchmarkBulkSha3_224(b *testing.B) { benchmarkBulkHash(b, New224()) }
 func BenchmarkBulkShake256(b *testing.B) { benchmarkBulkHash(b, NewShake256()) }
 func BenchmarkBulkShake128(b *testing.B) { benchmarkBulkHash(b, NewShake128()) }
+
+
+var bench = New256()
+var buf = make([]byte, 8192)
+
+func benchmarkSize(b *testing.B, size int) {
+	b.SetBytes(int64(size))
+	sum := make([]byte, bench.Size())
+	for i := 0; i < b.N; i++ {
+		bench.Reset()
+		bench.Write(buf[:size])
+		bench.Sum(sum[:0])
+	}
+}
+
+func BenchmarkHash8Bytes(b *testing.B) {
+	benchmarkSize(b, 8)
+}
+
+func BenchmarkHash1K(b *testing.B) {
+	benchmarkSize(b, 1024)
+}
+
+func BenchmarkHash8K(b *testing.B) {
+	benchmarkSize(b, 8192)
+}

@@ -12,13 +12,13 @@
 package sha3
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"hash"
 )
 
 type spongeState int
+
 const (
 	stateAbsorbing spongeState = 0
 	stateSqueezing             = iota
@@ -78,26 +78,21 @@ func (d *digest) Reset() {
 	d.state = stateAbsorbing
 }
 
-// BlockSize, required by the hash.Hash interface, does not have a standard intepretation
-// for a sponge-based construction like SHA3. We return the data rate: the number of bytes which
-// can be absorbed per invocation of the permutation function. For Merkle-Damgård based hashes
-// (ie SHA1, SHA2, MD5) the output size of the internal compression function is returned.
-// We consider this to be roughly equivalent because it represents the number of bytes of output
-// produced per cryptographic operation.
+// BlockSize is required by the hash.Hash interface, but isn't meaningful for
+// sponge-based constructions We return the data rate: the number of bytes
+// which can be absorbed per invocation of the permutation function.
 func (d *digest) BlockSize() int { return d.rate }
 
 // Size returns the output size of the hash function in bytes.
-func (d *digest) Size() int {
-	return d.outputSize
-}
+// TODO this is meaningless for the VOFs
+func (d *digest) Size() int { return d.outputSize }
 
 // xorInBytes xors the input buffer into the state, performing a byte-swap if
 // necessary
+// TODO only XOR the necessary part
 func (d *digest) xorFromBytebuf() {
-	temp := make([]uint64, 21)
-	buf := bytes.NewBuffer(d.bytebuf[:])
-	binary.Read(buf, binary.LittleEndian, temp)
-	for i, ai := range temp {
+	for i := 0; i < 21; i++ {
+		ai := binary.LittleEndian.Uint64(d.bytebuf[i*8:])
 		d.a[i] ^= ai
 	}
 	d.position = 0
