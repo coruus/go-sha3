@@ -128,8 +128,8 @@ func xorBytesFrom(dqw []uint64, buf []byte) int {
 	return ((len(buf) + 7) / 8) * 8
 }
 
-// copyToBytebuf copies ulint64s to a byte buffer. It only copies
-// (len(buf) / 8) * 8 bytes to buf
+// copyToBytebuf copies ulint64s to a byte buffer.
+// only copies floor(len(buf) / 8) * 8) bytes
 func copyBytesInto(buf []byte, dqw []uint64) int {
 	for i := 0; i < len(buf)/8; i++ {
 		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], dqw[i])
@@ -138,7 +138,7 @@ func copyBytesInto(buf []byte, dqw []uint64) int {
 }
 
 // Permute applies the KeccakF-1600 permutation.
-func (d *state) permute() {
+func (d *state) Permute() {
 	switch d.state {
 	case SpongeAbsorbing:
 		xorBytesFrom(d.a[:22], d.inputBuffer[:])
@@ -157,7 +157,7 @@ func (d *state) Pad(dsbyte byte) {
 	d.inputBuffer[d.position] ^= dsbyte
 	d.inputBuffer[d.rate-1] ^= 0x80
 	// Apply the permutation
-	d.permute()
+	d.Permute()
 	d.state = SpongeSqueezing
 	copyBytesInto(d.outputBuffer[:d.rate], d.a[:22])
 }
@@ -187,7 +187,7 @@ func (d *state) Absorb(p []byte) (written int) {
 			d.position += willWrite
 			// (0 < d.rate == d.position)
 			if d.position == d.rate {
-				d.permute()
+				d.Permute()
 				// Zero the input buffer.
 				for i := range d.inputBuffer {
 					d.inputBuffer[i] = 0
@@ -241,7 +241,7 @@ func (d *state) Squeeze(in []byte, toSqueeze int) (out []byte) {
 
 		// Apply the permutation if we've squeezed the sponge dry.
 		if d.position == d.rate {
-			d.permute()
+			d.Permute()
 		}
 	}
 	return append(in, out...)
@@ -254,4 +254,22 @@ func (d *state) Sum(in []byte) []byte {
 	// and summing.
 	dup := *d
 	return dup.Squeeze(in, dup.outputSize)
+}
+
+// NewSponge creates a new Keccak-based sponge instance of any
+// desired rate > 0 and < bytebufLen. Note that the resulting
+// function is *not* a SHAKE function, unless rate is 168 or 136,
+// and dsbyte == 0x1f
+//
+// By default the output size is equal to the rate minus - 1. Any
+// amount of output can be requested.
+func NewSponge(rate int, dsbyte byte) Sponge {
+	if rate > bufferLen || rate <= 0 {
+		return nil
+	}
+	return &state{
+		fixedOutput: false,
+		outputSize:  int(rate - 8),
+		rate:        int(rate),
+		dsbyte:      dsbyte}
 }

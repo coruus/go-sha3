@@ -15,7 +15,7 @@ type Sponge interface {
 	Rate() int
 
 	// Apply the underlying permutation.
-	//	Permute()
+	Permute()
 
 	// The three basic sponge operations; all apply the underlying
 	// permutation when the sponge is dry.
