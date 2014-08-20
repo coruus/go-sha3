@@ -9,7 +9,7 @@ import (
 // capacity (in bytes) is equal to the width of the permutation
 // minus the rate.
 type Sponge interface {
-	hash.Hash // TODO: Should this include hash.Hash?
+	hash.Hash
 
 	SpongeSize() int
 	Rate() int

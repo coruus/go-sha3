@@ -8,7 +8,6 @@
 // Both functions use a sponge construction and the KeccakF-1600 permutation.
 //
 // For a detailed specification of the functions, see http://keccak.noekeon.org/
-//
 package sha3
 
 import (
