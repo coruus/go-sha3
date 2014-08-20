@@ -63,29 +63,6 @@ type state struct {
 	state       SpongeDirection // current direction of the sponge
 }
 
-// Sponge represents the cryptographic sponge construction. A sponge is
-// instantiated by a permutation, a padding rule, and a "rate". Its
-// capacity (in bytes) is equal to the width of the permutation
-// minus the rate.
-type Sponge interface {
-	hash.Hash
-
-	SpongeSize() int
-	Rate() int
-	SecurityStrength() int
-
-	// The underlying permutation.
-	Permute()
-
-	// Apply the padding rule and permute.
-	Pad(byte)
-
-	// The three basic operations on a sponge's state.
-	Absorb([]byte) int
-	Squeeze([]byte, int) []byte
-	//Overwrite([]byte) int
-}
-
 // minInt returns the lesser of two integer arguments.
 func minInt(v1, v2 int) int {
 	if v1 <= v2 {
@@ -147,7 +124,7 @@ func (d *state) zeroBuffers() {
 // Precondition: ((len(buf) + 7) / 8) <= len(a)
 func xorBytesFrom(dqw []uint64, buf []byte) int {
 	dqwords := len(buf) / 8
-	// Xor in the whole ulnt64s
+	// Xor in the full ulint64s
 	for i := 0; i < dqwords; i++ {
 		a := binary.LittleEndian.Uint64(buf[i*8:])
 		dqw[i] ^= a
@@ -158,9 +135,7 @@ func xorBytesFrom(dqw []uint64, buf []byte) int {
 		copy(last, buf[dqwords*8:])
 		dqw[dqwords] ^= binary.LittleEndian.Uint64(last)
 	}
-	for i := range buf {
-		buf[i] = 0
-	}
+
 	return ((len(buf) + 7) / 8) * 8
 }
 
@@ -174,16 +149,23 @@ func copyBytesInto(buf []byte, dqw []uint64) int {
 }
 
 // Permute applies the KeccakF-1600 permutation.
-func (d *state) Permute() {
-	xorBytesFrom(d.a[:22], d.inputBuffer[:])
-	d.zeroBuffers()
-	keccakF(&d.a)
-	copyBytesInto(d.outputBuffer[:], d.a[:22])
+func (d *state) permute() {
+	switch d.state {
+	case SpongeAbsorbing:
+		xorBytesFrom(d.a[:22], d.inputBuffer[:])
+		keccakF(&d.a)
+	case SpongeSqueezing:
+		keccakF(&d.a)
+		copyBytesInto(d.outputBuffer[:], d.a[:22])
+	}
 	d.position = 0
 }
 
 // Absorb xors input bytes into the sponge state, applying
 // the permutation as necessary.
+//
+// The input buffer invariant:
+//     (d.position == 0) ==> (d.inputBuffer[:] == 0)
 func (d *state) Absorb(p []byte) (written int) {
 	toWrite := len(p)
 	written = 0
@@ -191,10 +173,26 @@ func (d *state) Absorb(p []byte) (written int) {
 		canWrite := d.rate - d.position
 		willWrite := minInt(toWrite, canWrite)
 
-		copy(d.inputBuffer[d.position:], p[written:written+willWrite])
-		d.position += willWrite
-		if d.position == d.rate {
-			d.Permute()
+		if willWrite == d.rate {
+			// The fast path; absorb a full rate of input and apply the
+			// permutation.
+			// (willWrite == d.rate) ==> (d.position == 0) ==> d.inputBufer[:] == 0
+			xorBytesFrom(d.a[:21], p[written:written+willWrite])
+			keccakF(&d.a)
+		} else {
+			// The slow path; buffer the input until we can fill the sponge,
+			// and then xor it in.
+			copy(d.inputBuffer[d.position:], p[written:written+willWrite])
+			d.position += willWrite
+			// (0 < d.rate == d.position)
+			if d.position == d.rate {
+				d.permute()
+				// Zero the input buffer.
+				for i := range d.inputBuffer {
+					d.inputBuffer[i] = 0
+				}
+				d.position = 0
+			}
 		}
 		toWrite -= willWrite
 		written += willWrite
@@ -216,37 +214,30 @@ func (d *state) pad(dsbyte byte) {
 	d.inputBuffer[d.rate-1] ^= 0x80
 }
 
-// finalize prepares the hash to output data by applying the padding,
-// xoring the last block into the state, applying the permutation, and
-// copying the first buffer-length of output.
-func (d *state) finalize() {
+// Pads appends the multi-bitrate padding, and applies the permutation.
+func (d *state) Pad(dsbyte byte) {
 	// Pad with this instance's domain-separator bits.
 	d.pad(d.dsbyte)
-	d.Permute()
+	// Apply the permutation
+	d.permute()
 	d.state = SpongeSqueezing
-}
-
-// Pad appends the multi-bitrate padding, and applies the permutation.
-func (d *state) Pad(dsbyte byte) {
-	d.pad(dsbyte)
-	d.Permute()
+	copyBytesInto(d.outputBuffer[:d.rate], d.a[:22])
 }
 
 // Squeeze outputs an arbitrary number of bytes from the hash state.
-// Squeezing can require multiple calls to the F function (one per rate() bytes
+// Squeezing can require multiple calls to the F function (one per rate bytes
 // squeezed).
 func (d *state) Squeeze(in []byte, toSqueeze int) (out []byte) {
 	// Check that the sponge is in the correct state.
 	switch d.state {
 	case SpongeAbsorbing:
 		// If we're still absorbing, pad and apply the permutation.
-		d.finalize()
-		d.state = SpongeSqueezing
+		d.Pad(d.dsbyte)
 	}
 
 	// If this is a fixed-output length instance, we only allow
-	// the sponge to be squeezed once, and only allow squeezing
-	// up to OutputSize() bytes.
+	// squeezing up to OutputSize() bytes; calls after outputSize
+	// bytes have been squeezed will result in no output.
 	if d.fixedOutput && toSqueeze > (d.outputSize-d.position) {
 		toSqueeze = (d.outputSize - d.position)
 	}
@@ -268,23 +259,25 @@ func (d *state) Squeeze(in []byte, toSqueeze int) (out []byte) {
 
 		// Apply the permutation if we've squeezed the sponge dry.
 		if d.position == d.rate {
-			d.Permute()
+			d.permute()
 		}
 	}
 	return append(in, out...)
 }
 
-// Sum applies padding to the hash state and then squeezes out the desired number of output bytes.
+// Sum applies padding to the hash state and then squeezes out the desired
+// number of output bytes.
 func (d *state) Sum(in []byte) []byte {
-	// Make a copy of the original hash so that caller can keep writing and summing.
+	// Make a copy of the original hash so that caller can keep writing
+	// and summing.
 	dup := *d
 	return dup.Squeeze(in, dup.outputSize)
 }
 
 // SHA-3 fixed-output-length functions. These are intended for use as
 // "drop-in" replacements for the corresponding SHA-2 instances. They
-// have the same generic security strengths. NIST recommends that most
-// new applications use a SHAKE variable-output-length instance.
+// have the same generic security strengths against all attacks as the
+// corresponding SHA-2 instances.
 
 // New224 creates a new SHA3-224 hash
 // Its generic security strength is 224 bits against preimage attacks,
@@ -333,7 +326,7 @@ func New512() hash.Hash {
 
 // SHAKE variable-output-length hash functions.
 
-// NewShake128Hash creates a new SHAKE128 variable-output-length Sponge
+// NewShake128Hash creates a new SHAKE128 variable-output-length Sponge.
 // Its generic security strength is 128 bits against all attacks if at
 // least 32 bytes of its output are used.
 func NewShake128() Sponge {
@@ -344,7 +337,7 @@ func NewShake128() Sponge {
 		dsbyte:      0x1f}
 }
 
-// NewShake256Hash creates a new SHAKE128 variable-output-length Sponge
+// NewShake256 creates a new SHAKE128 variable-output-length Sponge.
 // Its generic security strength is 256 bits against all attacks if
 // at least 64 bytes of its output are used.
 func NewShake256() Sponge {
