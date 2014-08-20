@@ -17,12 +17,21 @@ import (
 	"testing"
 )
 
-// testDigests maintains a digest state of each standard type.
+const (
+	testString = "brekeccakkeccak koax koax"
+)
+
+// testDigests maintains a state state of each standard type.
 var testDigests = map[string]func() hash.Hash{
 	"SHA3-224": New224,
 	"SHA3-256": New256,
 	"SHA3-384": New384,
 	"SHA3-512": New512,
+	"SHAKE128": NewHashShake128,
+	"SHAKE256": NewHashShake256,
+}
+
+var testShakes = map[string]func() Sponge{
 	"SHAKE128": NewShake128,
 	"SHAKE256": NewShake256,
 }
@@ -61,6 +70,7 @@ func TestKeccakKats(t *testing.T) {
 	}
 	for functionName, kats := range katSet.Kats {
 		d := testDigests[functionName]()
+		t.Logf("%s", functionName)
 		for _, kat := range kats {
 			d.Reset()
 			in, err := hex.DecodeString(kat.Message)
@@ -71,16 +81,16 @@ func TestKeccakKats(t *testing.T) {
 			got := strings.ToUpper(hex.EncodeToString(d.Sum(nil)))
 			want := kat.Digest
 			if got != want {
-				t.Errorf("function=%s, length=%d\nmessage:\n  %s\ngot:\n  %s\nwanted:\n  %s", functionName, kat.Length, kat.Message, got, want)
-			} else {
-				t.Logf("function=%s, length=%u: OKAY\n", functionName, kat.Length)
+				t.Errorf("function=%s, length=%d\nmessage:\n  %s\ngot:\n  %s\nwanted:\n %s", functionName, kat.Length, kat.Message, got, want)
+				t.Logf("wanted %r", kat)
+				t.FailNow()
 			}
 		}
 	}
 }
 
 // dumpState is a debugging function to pretty-print the internal state of the hash.
-func (d *digest) dumpState() {
+func (d *state) dumpState() {
 	fmt.Printf("SHA3 hash, %d B output, %db security strength (%d B rate)\n",
 		d.outputSize, d.SecurityStrength(), d.rate)
 	fmt.Printf("Internal state after absorbing %d B:\n", d.position)
@@ -93,7 +103,8 @@ func (d *digest) dumpState() {
 	}
 }
 
-// TestUnalignedWrite tests that writing data in an arbitrary pattern with small input buffers.
+// TestUnalignedWrite tests that writing data in an arbitrary pattern with
+// small input buffers.
 func TestUnalignedWrite(t *testing.T) {
 	buf := sequentialBytes(0x10000)
 	for alg, df := range testDigests {
@@ -147,6 +158,28 @@ func TestAppendNoRealloc(t *testing.T) {
 	}
 }
 
+// TestSqueezing checks that squeezing the full output a single time produces
+// the repeatedly squeezing the instance.
+func TestSqueezing(t *testing.T) {
+	for functionName, newHash := range testShakes {
+		t.Logf("%s", functionName)
+		d0 := newHash().(*state)
+		d0.Write([]byte(testString))
+		ref := d0.Sum(nil)
+
+		d1 := newHash().(*state)
+		d1.Write([]byte(testString))
+		multiple := d1.Squeeze(nil, 0)
+		for _ = range ref {
+			multiple = d1.Squeeze(multiple, 1)
+		}
+		if !bytes.Equal(ref, multiple) {
+			t.Errorf("squeezing %d bytes one at a time failed", len(ref))
+		}
+
+	}
+}
+
 // sequentialBytes produces a buffer of size consecutive bytes 0x00, 0x01, ..., used for testing.
 func sequentialBytes(size int) []byte {
 	result := make([]byte, size)
@@ -158,7 +191,7 @@ func sequentialBytes(size int) []byte {
 
 // benchmarkBlockWrite tests the speed of writing data and never calling the permutation function.
 func benchmarkBlockWrite(b *testing.B, h hash.Hash) {
-	d := h.(*digest)
+	d := h.(*state)
 	b.StopTimer()
 	d.Reset()
 	// Write all but the last byte of a block, to ensure that the permutation is not called.
@@ -168,7 +201,7 @@ func benchmarkBlockWrite(b *testing.B, h hash.Hash) {
 	for i := 0; i < b.N; i++ {
 		d.position = 0 // Reset absorbed to avoid ever calling the permutation function
 		d.Write(data)
-		d.xorFromBytebuf()
+		xorBytesFrom(d.a[:], d.inputBuffer[:])
 	}
 	b.StopTimer()
 	d.Reset()
@@ -186,7 +219,7 @@ func BenchmarkPermutationFunction(b *testing.B) {
 // BenchmarkSingleByteWrite tests the latency from writing a single byte
 func BenchmarkSingleByteWrite(b *testing.B) {
 	b.StopTimer()
-	d := testDigests["SHA3-512"]().(*digest)
+	d := testDigests["SHA3-512"]().(*state)
 	d.Reset()
 	data := sequentialBytes(1) //1 byte buffer
 	b.SetBytes(int64(d.Rate()) - 1)
@@ -203,7 +236,7 @@ func BenchmarkSingleByteWrite(b *testing.B) {
 	d.Reset()
 }
 
-// BenchmarkSingleByteX measures the block write speed for each size of the digest.
+// BenchmarkSingleByteX measures the block write speed for each size of the state.
 func BenchmarkBlockWrite512(b *testing.B) { benchmarkBlockWrite(b, testDigests["SHA3-512"]()) }
 func BenchmarkBlockWrite384(b *testing.B) { benchmarkBlockWrite(b, testDigests["SHA3-384"]()) }
 func BenchmarkBlockWrite256(b *testing.B) { benchmarkBlockWrite(b, testDigests["SHA3-256"]()) }
@@ -218,10 +251,10 @@ func benchmarkBulkHash(b *testing.B, h hash.Hash) {
 	b.SetBytes(int64(size))
 	b.StartTimer()
 
-	var digest []byte
+	var state []byte
 	for i := 0; i < b.N; i++ {
 		h.Write(data)
-		digest = h.Sum(digest[:0])
+		state = h.Sum(state[:0])
 	}
 	b.StopTimer()
 	h.Reset()
