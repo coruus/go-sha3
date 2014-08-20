@@ -1,14 +1,14 @@
-// Copyright 2013 The Go Authors. All rights reserved.
+// Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package sha3 implements the SHA3 hash algorithm (formerly called Keccak) chosen by NIST in 2012.
-// This file provides a SHA3 implementation which implements the standard hash.Hash interface.
-// Writing input data, including padding, and reading output data are computed in this file.
-// Note that the current implementation can compute the hash of an integral number of bytes only.
-// This is a consequence of the hash interface in which a buffer of bytes is passed in.
-// The internals of the Keccak-f function are computed in keccakf.go.
-// For the detailed specification, refer to the Keccak web site (http://keccak.noekeon.org/).
+// Package sha3 implements the SHA-3 fixed-output-length hash functions and
+// the SHAKE variable-output-length has function defined by FIPS-202.
+//
+// Both functions use a sponge construction and the KeccakF-1600 permutation.
+//
+// For a detailed specification of the functions, see http://keccak.noekeon.org/
+//
 package sha3
 
 import (
@@ -17,16 +17,26 @@ import (
 	"hash"
 )
 
+/*
+func init() {
+	crypto.RegisterHash(crypto.SHA3_224, New224)
+	crypto.RegisterHash(crypto.SHA3_256, New256)
+	crypto.RegisterHash(crypto.SHA3_384, New384)
+	crypto.RegisterHash(crypto.SHA3_512, New512)
+	crypto.RegisterHash(crypto.SHAKE128, NewShake128)
+	crypto.RegisterHash(crypto.SHAKE256, NewShake256)
+}*/
+
 type spongeState int
 
 const (
-	stateAbsorbing spongeState = 0
-	stateSqueezing             = iota
-	stateSqueezed
+	stateAbsorbing spongeState = 0    // the sponge can absorb more input
+	stateSqueezing             = iota // the sponge can *only* be squeezed
+	stateSqueezed                     // all the output permitted has been squeezed
 )
 
 const (
-	bytebufLen = 176
+	bytebufLen = 176 // the length of the input buffer; determines maximum rate
 )
 
 var (
@@ -36,20 +46,19 @@ var (
 		"too much output requested from a fixed-output-length hash")
 )
 
-// digest represents the partial evaluation of a checksum.
+// digest is a sponge object (TODO(?): rename?)
 type digest struct {
-	hash.Hash
 	a           [25]uint64       // main state of the hash
-	outputSize  int              // desired output size in bytes
-	bytebuf     [bytebufLen]byte // the input buffer (max rate == 168)
-	rate        int              // the maximum number of bytes to touch in the state
-	position    int              // position in the input buffer
-	state       spongeState      // current state of the sponge (absorbing or squeezing)
+	bytebuf     [bytebufLen]byte // the input buffer
 	dsbyte      byte             // the domain separator byte
 	fixedOutput bool             // whether this is a fixed-ouput-length instance
+	outputSize  int              // desired output size in bytes
+	position    int              // position in the input buffer
+	rate        int              // the maximum number of bytes to touch in the state
+	state       spongeState      // current state of the sponge (absorbing or squeezing)
 }
 
-// minInt returns the lesser of two integer arguments, to simplify the absorption routine.
+// minInt returns the lesser of two integer arguments.
 func minInt(v1, v2 int) int {
 	if v1 <= v2 {
 		return v1
@@ -57,6 +66,8 @@ func minInt(v1, v2 int) int {
 	return v2
 }
 
+// SpongeSize returns the size, in bytes, of the sponge. (For KeccakF-1600, this
+// is always 200 bytes.)
 func (d *digest) SpongeSize() int {
 	return 200
 }
@@ -67,8 +78,13 @@ func (d *digest) SecurityStrength() int {
 	return 8 * (200 - (d.rate / 2))
 }
 
-// Reset clears the internal state by zeroing bytes in the state buffer.
-// This can be skipped for a newly-created hash state; the default zero-allocated state is correct.
+// Rate returns the byterate of the sponge
+func (d *digest) Rate() int {
+	return d.rate
+}
+
+// Reset clears the internal state by zeroing the sponge state, as well
+// as the byte buffer.
 func (d *digest) Reset() {
 	d.position = 0
 	for i := range d.a {
@@ -80,18 +96,14 @@ func (d *digest) Reset() {
 	d.state = stateAbsorbing
 }
 
-// BlockSize is required by the hash.Hash interface, but isn't meaningful for
-// sponge-based constructions We return the data rate: the number of bytes
-// which can be absorbed per invocation of the permutation function.
+// BlockSize is the rate of the sponge instance underlying the hash function.
 func (d *digest) BlockSize() int { return d.rate }
 
 // Size returns the output size of the hash function in bytes.
-// TODO this is meaningless for the VOFs
 func (d *digest) Size() int { return d.outputSize }
 
-// xorInBytes xors the input buffer into the state, performing a byte-swap if
-// necessary
-// TODO only XOR the necessary part
+// xorInBytes xors the input buffer into the state, byte-swapping to
+// little-endian as necessary
 func (d *digest) xorFromBytebuf() {
 	for i := 0; i < 21; i++ {
 		ai := binary.LittleEndian.Uint64(d.bytebuf[i*8:])
@@ -110,16 +122,13 @@ func (d *digest) copyToBytebuf() {
 	}
 }
 
-// Apply the permutation.
+// permute applies the KeccakF-1600 permutation
 func (d *digest) permute() {
 	keccakF(&d.a)
 }
 
-// Write "absorbs" bytes into the state of the SHA3 hash, updating as needed
-// when the sponge "fills up" with rate bytes.
-// TODO(dlg): how to handle writing into a closed-out sponge instance? (This isn't
-// a problem if only the hash.Hash interface is used, but it would be nice to
-// support hash-and-continue.)
+// Write absorbs bytes into the state of the SHA3 hash, updating as needed
+// when the sponge fills up with rate bytes.
 func (d *digest) Write(p []byte) (inputOffset int, err error) {
 	toWrite := len(p)
 	inputOffset = 0
@@ -139,9 +148,10 @@ func (d *digest) Write(p []byte) (inputOffset int, err error) {
 	return int(inputOffset), nil
 }
 
-// pad applies the SHA3 padding scheme based on the number of bytes absorbed.
-func (d *digest) pad() {
-	d.bytebuf[d.position] ^= d.dsbyte
+// pad appends the domain separation bits and applies the multi-bitrate
+// 10..1 padding rule. (dsbyte must contain the leading 1 bit)
+func (d *digest) pad(dsbyte byte) {
+	d.bytebuf[d.position] ^= dsbyte
 	d.bytebuf[d.rate-1] ^= 0x80
 }
 
@@ -149,7 +159,8 @@ func (d *digest) pad() {
 // xoring the last block into the state, applying the permutation, and
 // copying the first buffer-length of output.
 func (d *digest) finalize() {
-	d.pad()
+	// Pad with this instance's domain-separator bits.
+	d.pad(d.dsbyte)
 	d.xorFromBytebuf()
 	d.permute()
 	d.copyToBytebuf()
@@ -171,11 +182,14 @@ func (d *digest) Squeeze(in []byte, toSqueeze int) (out []byte, err error) {
 		return nil, errSha3CanOnlySqueezeOnce
 	}
 
+	// If this is a fixed-output length instance, we only allow
+	// the sponge to be squeezed once, and only allow squeezing
+	// up to OutputSize() bytes.
 	if d.fixedOutput {
-		if toSqueeze > d.outputSize {
-			return nil, errSha3DigestTooLong
+		if toSqueeze > (d.outputSize - d.position) {
+			toSqueeze = (d.outputSize - d.position)
 		}
-		// Set to prevent another call.
+		// Set to prevent another call. TODO(dlg): necessary?
 		d.state = stateSqueezed
 	}
 
@@ -186,22 +200,22 @@ func (d *digest) Squeeze(in []byte, toSqueeze int) (out []byte, err error) {
 		canSqueeze := d.rate - d.position
 		willSqueeze := minInt(toSqueeze, canSqueeze)
 
-		// Copy the output from the sponge's buffer
-		copy(out[outOffset:outOffset+willSqueeze], d.bytebuf[d.position:d.position+willSqueeze])
+		// Copy the output from the sponge's buffer.
+		copy(out[outOffset:outOffset+willSqueeze],
+			d.bytebuf[d.position:d.position+willSqueeze])
 
 		d.position += willSqueeze
 		outOffset += willSqueeze
 		toSqueeze -= willSqueeze
 
-		// Apply the permutation when we've used up "rate" bytes.
+		// Apply the permutation if we've squeezed the sponge dry.
 		if d.position == d.rate {
 			d.permute()
 			d.copyToBytebuf()
 			d.position = 0
 		}
-
 	}
-	return append(in, out...), nil // Re-slice in case we wrote extra data.
+	return append(in, out...), nil
 }
 
 // Sum applies padding to the hash state and then squeezes out the desired number of output bytes.
@@ -210,19 +224,22 @@ func (d *digest) Sum(in []byte) []byte {
 	dup := *d
 	out, err := dup.Squeeze(in, dup.outputSize)
 	if err != nil {
-		panic("this should not be possible")
+		panic("error in sha3.Sum: this should not be possible; an invalid" +
+			"output size has been chosen")
+		//TODO: what should the error behavior be?
 	}
-	// TODO: how should errors be handled?
 	return out
 }
 
-// The NewKeccakX constructors enable initializing a hash in any of the four recommend sizes
-// from the Keccak specification, all of which set capacity=2*outputSize. Note that the final
-// NIST standard for SHA3 may specify different input/output lengths.
-// The output size is indicated in bits but converted into bytes internally.
+// SHA-3 fixed-output-length functions. These are intended for use as
+// "drop-in" replacements for the corresponding SHA-2 instances. They
+// have the same generic security strengths. NIST recommends that most
+// new applications use a SHAKE variable-output-length instance.
 
 // New224 creates a new SHA3-224 hash
-func New224() *digest {
+// Its generic security strength is 224 bits against preimage attacks,
+// and 112 bits against collision attacks.
+func New224() hash.Hash {
 	d := &digest{
 		outputSize:  224 / 8,
 		fixedOutput: true,
@@ -231,8 +248,10 @@ func New224() *digest {
 	return d
 }
 
-// New256 creates a new SHA3-224 hash
-func New256() *digest {
+// New256 creates a new SHA3-256 hash
+// Its generic security strength is 256 bits against preimage attacks,
+// and 128 bits against collision attacks.
+func New256() hash.Hash {
 	return &digest{
 		outputSize:  256 / 8,
 		fixedOutput: true,
@@ -241,7 +260,9 @@ func New256() *digest {
 }
 
 // New384 creates a new SHA3-384 hash
-func New384() *digest {
+// Its generic security strength is 384 bits against preimage attacks,
+// and 192 bits against collision attacks.
+func New384() hash.Hash {
 	return &digest{
 		outputSize:  384 / 8,
 		fixedOutput: true,
@@ -249,8 +270,10 @@ func New384() *digest {
 		dsbyte:      0x06}
 }
 
-// New512 creates a new SHA3-512 hash
-func New512() *digest {
+// New512 creates a new SHA3-512 hash.Hash
+// Its generic security strength is 512 bits against preimage attacks,
+// and 256 bits against collision attacks.
+func New512() hash.Hash {
 	return &digest{
 		outputSize:  512 / 8,
 		fixedOutput: true,
@@ -258,8 +281,12 @@ func New512() *digest {
 		dsbyte:      0x06}
 }
 
-// NewShake128 creates a new SHAKE128 variable-output-length hash
-func NewShake128() *digest {
+// SHAKE variable-output-length hash functions.
+
+// NewShake128 creates a new SHAKE128 variable-output-length hash.Hash
+// Its generic security strength is 128 bits against all attacks if at
+// least 32 bytes of its output are used.
+func NewShake128() hash.Hash {
 	return &digest{
 		fixedOutput: false,
 		outputSize:  512,
@@ -267,8 +294,10 @@ func NewShake128() *digest {
 		dsbyte:      0x1f}
 }
 
-// NewShake256 creates a new SHAKE128 variable-output-length hash
-func NewShake256() *digest {
+// NewShake256 creates a new SHAKE128 variable-output-length hash.Hash
+// Its generic security strength is 256 bits against all attacks if
+// at least 64 bytes of its output are used.
+func NewShake256() hash.Hash {
 	return &digest{
 		fixedOutput: false,
 		outputSize:  512,
@@ -277,14 +306,15 @@ func NewShake256() *digest {
 }
 
 // NewShake creates a new SHAKE variable-output-length hash of any
-// desired rate > 0 and < bytebufLen
-func NewShake(rate, outputSize int) *digest {
+// desired rate > 0 and < bytebufLen. Note that this is *not* approved
+// for use by FIPS-202, unless rate == 168 or rate == 136.
+func NewShake(rate int) hash.Hash {
 	if rate > bytebufLen || rate <= 0 {
 		return nil
 	}
 	return &digest{
 		fixedOutput: false,
-		outputSize:  int(outputSize),
+		outputSize:  int(rate),
 		rate:        int(rate),
 		dsbyte:      0x1f}
 }
