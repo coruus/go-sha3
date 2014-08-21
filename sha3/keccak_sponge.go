@@ -5,9 +5,10 @@
 // Package sha3 implements the SHA-3 fixed-output-length hash functions and
 // the SHAKE variable-output-length has function defined by FIPS-202.
 //
-// Both functions use a sponge construction and the KeccakF-1600 permutation.
+// Both types of hash function use the sponge construction and
+// KeccakF-1600 permutation.
 //
-// For a detailed specification of the functions, see http://keccak.noekeon.org/
+// For a detailed specification, see http://keccak.noekeon.org/
 package sha3
 
 import (
@@ -174,8 +175,7 @@ func (d *state) Absorb(p []byte) (written int) {
 		willWrite := minInt(toWrite, canWrite)
 
 		if willWrite == d.rate {
-			// The fast path; absorb a full rate of input and apply the
-			// permutation.
+			// The fast path; absorb a full rate of input and apply the permutation.
 			// (willWrite == d.rate) ==> (d.position == 0) ==> d.inputBufer[:] == 0
 			xorBytesFrom(d.a[:21], p[written:written+willWrite])
 			keccakF(&d.a)
@@ -198,13 +198,6 @@ func (d *state) Absorb(p []byte) (written int) {
 		written += willWrite
 	}
 	return int(written)
-}
-
-// Write absorbs bytes into the state of the SHA3 hash, applying
-// the permutation as needed when the sponge fills up with rate bytes.
-func (d *state) Write(p []byte) (written int, err error) {
-	n := d.Absorb(p)
-	return n, nil
 }
 
 // Squeeze squeezes an arbitrary number of bytes from the sponge.
@@ -244,6 +237,31 @@ func (d *state) Squeeze(in []byte, toSqueeze int) (out []byte) {
 		}
 	}
 	return append(in, out...)
+}
+
+// MakeOneWay overwrites SecurityStrength() / 2 bits of the state with zeros
+// and applies the permutation; after doing this, it is no longer possible
+// to use the inverse of the permutation to recover previous inputs.
+func (d *state) MakeOneWay() {
+	// TODO(dlg): Check whether padding is required by CSF-0.1
+	for i := 0; i < (keccakSpongeSize-d.rate)/8; i++ {
+		d.a[i] = 0
+	}
+	keccakF(&d.a)
+}
+
+// Functions to satisfy the hash.Hash and io.Writer interfaces:
+
+// Write absorbs bytes from the input buffer into the sponge / hash.
+func (d *state) Write(p []byte) (written int, err error) {
+	n := d.Absorb(p)
+	return n, nil
+}
+
+// Read squeezes output from the sponge / hash.
+func (d *state) Read(p []byte) (read int, err error) {
+	p = d.Squeeze(p, len(p))
+	return len(p), nil
 }
 
 // Sum applies padding to the hash state and then squeezes out the desired

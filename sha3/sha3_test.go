@@ -1,13 +1,15 @@
-// Copyright 2013 The Go Authors. All rights reserved.
+// Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package sha3
 
-// These tests are a subset of those provided by the Keccak web site(http://keccak.noekeon.org/).
+// TODO(update comment): These tests are a subset of those provided by the Keccak web site
+// (http://keccak.noekeon.org/).
 
 import (
 	"bytes"
+	"compress/flate"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,7 +20,8 @@ import (
 )
 
 const (
-	testString = "brekeccakkeccak koax koax"
+	testString  = "brekeccakkeccak koax koax"
+	katFilename = "keccakKats.json.deflate"
 )
 
 // testDigests maintains a state state of each standard type.
@@ -58,10 +61,11 @@ type KeccakKats struct {
 // ShortMsgKATs from https://github.com/gvanas/KeccakCodePackage
 // (The testvectors are stored in keccakKats.json due to their length.)
 func TestKeccakKats(t *testing.T) {
-	file, err := os.Open("keccakKats.json")
+	deflated, err := os.Open(katFilename)
 	if err != nil {
-		t.Errorf("%s", err)
+		t.Errorf("Error opening %s: %s", katFilename, err)
 	}
+	file := flate.NewReader(deflated)
 	dec := json.NewDecoder(file)
 	var katSet KeccakKats
 	err = dec.Decode(&katSet)
@@ -81,7 +85,8 @@ func TestKeccakKats(t *testing.T) {
 			got := strings.ToUpper(hex.EncodeToString(d.Sum(nil)))
 			want := kat.Digest
 			if got != want {
-				t.Errorf("function=%s, length=%d\nmessage:\n  %s\ngot:\n  %s\nwanted:\n %s", functionName, kat.Length, kat.Message, got, want)
+				t.Errorf("function=%s, length=%d\nmessage:\n  %s\ngot:\n  %s\nwanted:\n %s",
+					functionName, kat.Length, kat.Message, got, want)
 				t.Logf("wanted %r", kat)
 				t.FailNow()
 			}
@@ -105,7 +110,6 @@ func (d *state) dumpState() {
 
 // TestUnalignedWrite tests that writing data in an arbitrary pattern with
 // small input buffers.
-/*
 func TestUnalignedWrite(t *testing.T) {
 	buf := sequentialBytes(0x10000)
 	for alg, df := range testDigests {
@@ -130,7 +134,7 @@ func TestUnalignedWrite(t *testing.T) {
 		}
 	}
 }
-*/
+
 func TestAppend(t *testing.T) {
 	d := New224()
 
@@ -177,7 +181,6 @@ func TestSqueezing(t *testing.T) {
 		if !bytes.Equal(ref, multiple) {
 			t.Errorf("squeezing %d bytes one at a time failed", len(ref))
 		}
-
 	}
 }
 
@@ -208,7 +211,8 @@ func benchmarkBlockWrite(b *testing.B, h hash.Hash) {
 	d.Reset()
 }
 
-// BenchmarkPermutationFunction measures the speed of the permutation function with no input data.
+// BenchmarkPermutationFunction measures the speed of the permutation function
+// with no input data.
 func BenchmarkPermutationFunction(b *testing.B) {
 	b.SetBytes(int64(200))
 	var lanes [25]uint64
@@ -220,13 +224,13 @@ func BenchmarkPermutationFunction(b *testing.B) {
 // BenchmarkSingleByteWrite tests the latency from writing a single byte
 func BenchmarkSingleByteWrite(b *testing.B) {
 	b.StopTimer()
-	d := testDigests["SHA3-512"]().(*state)
+	d := NewShake256().(*state)
 	d.Reset()
 	data := sequentialBytes(1) //1 byte buffer
 	b.SetBytes(int64(d.Rate()) - 1)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		d.position = 0 // Reset absorbed to avoid ever calling the permutation function
+		d.position = 0 // Reset position to avoid ever calling the permutation function
 
 		// Write all but the last byte of a block, one byte at a time.
 		for j := 0; j < d.rate-1; j++ {
@@ -238,10 +242,12 @@ func BenchmarkSingleByteWrite(b *testing.B) {
 }
 
 // BenchmarkSingleByteX measures the block write speed for each size of the state.
-func BenchmarkBlockWrite512(b *testing.B) { benchmarkBlockWrite(b, testDigests["SHA3-512"]()) }
-func BenchmarkBlockWrite384(b *testing.B) { benchmarkBlockWrite(b, testDigests["SHA3-384"]()) }
-func BenchmarkBlockWrite256(b *testing.B) { benchmarkBlockWrite(b, testDigests["SHA3-256"]()) }
-func BenchmarkBlockWrite224(b *testing.B) { benchmarkBlockWrite(b, testDigests["SHA3-224"]()) }
+func BenchmarkBlockWrite512(b *testing.B)      { benchmarkBlockWrite(b, testDigests["SHA3-512"]()) }
+func BenchmarkBlockWrite384(b *testing.B)      { benchmarkBlockWrite(b, testDigests["SHA3-384"]()) }
+func BenchmarkBlockWrite256(b *testing.B)      { benchmarkBlockWrite(b, testDigests["SHA3-256"]()) }
+func BenchmarkBlockWrite224(b *testing.B)      { benchmarkBlockWrite(b, testDigests["SHA3-224"]()) }
+func BenchmarkBlockWriteShake256(b *testing.B) { benchmarkBlockWrite(b, NewHashShake256()) }
+func BenchmarkBlockWriteShake128(b *testing.B) { benchmarkBlockWrite(b, NewHashShake128()) }
 
 // benchmarkBulkHash tests the speed to hash a 16 KiB buffer.
 func benchmarkBulkHash(b *testing.B, h hash.Hash) {

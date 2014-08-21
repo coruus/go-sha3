@@ -1,13 +1,14 @@
-// Copyright 2013 The Go Authors. All rights reserved.
+// Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package sha3
 
-// This file implements the core Keccak permutation function necessary for computing SHA3.
-// This is implemented in a separate file to allow for replacement by an optimized implementation.
-// Nothing in this package is exported.
-// For the detailed specification, refer to the Keccak web site (http://keccak.noekeon.org/).
+// This file implements the KeccakF-1600 permutation used by SHA-3.
+//
+// This is implemented in a separate file to allow for replacement by
+// an optimized implementation. For a detailed specification of Keccak,
+// refer to the Keccak team's web site: http://keccak.noekeon.org/
 
 // rc stores the round constants for use in the ι step.
 var rc = [24]uint64{
