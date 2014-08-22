@@ -32,7 +32,7 @@ func newHashShake256() hash.Hash {
 	return &state{rate: 136, dsbyte: 0x1f, outputSize: 512}
 }
 
-// testDigests contains a function returning a hash.Hash instance
+// testDigests contains functions returning hash.Hash instances
 // with output-length equal to the KAT length for both SHA-3 and
 // SHAKE instances.
 var testDigests = map[string]func() hash.Hash{
@@ -44,6 +44,7 @@ var testDigests = map[string]func() hash.Hash{
 	"SHAKE256": newHashShake256,
 }
 
+// testShakes contains
 var testShakes = map[string]func() VariableHash{
 	"SHAKE128": NewShake128,
 	"SHAKE256": NewShake256,
