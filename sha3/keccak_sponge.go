@@ -13,15 +13,14 @@ package sha3
 
 import (
 	"encoding/binary"
-	"errors"
 )
 
 // SpongeDirection indicates the direction bytes are flowing through the sponge.
-type SpongeDirection int
+type spongeDirection int
 
 const (
 	// SpongeAbsorbing indicates the sponge is absorbing input
-	SpongeAbsorbing SpongeDirection = 0
+	SpongeAbsorbing spongeDirection = 0
 	// SpongeSqueezing indicates the sponge is being squeezed
 	SpongeSqueezing = 1
 )
@@ -29,13 +28,6 @@ const (
 const (
 	bufferLen        = 176 // the length of the input buffer; determines maximum rate
 	keccakSpongeSize = 200
-)
-
-var (
-	errSha3CanOnlySqueezeOnce = errors.New(
-		"fixed-output-length functions can only be squeezed once")
-	errSha3DigestTooLong = errors.New(
-		"too much output requested from a fixed-output-length hash")
 )
 
 type state struct {
@@ -52,7 +44,7 @@ type state struct {
 	// Specific to SHA-3 and SHAKE
 	fixedOutput bool            // whether this is a fixed-ouput-length instance
 	outputSize  int             // the default output size in bytes
-	state       SpongeDirection // current direction of the sponge
+	state       spongeDirection // current direction of the sponge
 }
 
 // minInt returns the lesser of two integer arguments.
@@ -63,22 +55,8 @@ func minInt(v1, v2 int) int {
 	return v2
 }
 
-// SpongeSize returns the size, in bytes, of the sponge. (For KeccakF-1600, this
-// is always 200 bytes.)
-func (d *state) SpongeSize() int { return keccakSpongeSize }
-
-// SecurityStrength returns the generic security strength (in bits) of this
-// sponge instance.
-func (d *state) SecurityStrength() int { return 8 * (d.SpongeSize() - (d.Rate() / 2)) }
-
-// State returns whether the sponge is absorbing or squeezing.
-func (d *state) State() SpongeDirection { return d.state }
-
-// Rate returns the byterate of the sponge
-func (d *state) Rate() int { return d.rate }
-
 // BlockSize returns the rate of sponge underlying this hash function.
-func (d *state) BlockSize() int { return d.Rate() }
+func (d *state) BlockSize() int { return d.rate }
 
 // Size returns the output size of the hash function in bytes.
 func (d *state) Size() int { return d.outputSize }
@@ -86,9 +64,8 @@ func (d *state) Size() int { return d.outputSize }
 // Reset clears the internal state by zeroing the sponge state and
 // the byte buffer, and setting Sponge.state to absorbing.
 func (d *state) Reset() {
-	// Reset the position.
-	d.position = 0  // reset position
-	d.zeroBuffers() // zero buffers
+	d.position = 0  // Reset position.
+	d.zeroBuffers() // Zero buffers.
 	// Zero the permutation's state.
 	for i := range d.a {
 		d.a[i] = 0
@@ -119,7 +96,7 @@ func xorBytesFrom(dqw []uint64, buf []byte) int {
 		dqw[i] ^= a
 	}
 	if len(buf)%8 != 0 {
-		// Xor in the last partial ulint64
+		// Xor in the last partial ulint64.
 		last := make([]byte, 8)
 		copy(last, buf[dqwords*8:])
 		dqw[dqwords] ^= binary.LittleEndian.Uint64(last)
@@ -137,8 +114,9 @@ func copyBytesInto(buf []byte, dqw []uint64) int {
 	return (len(buf) / 8) * 8
 }
 
-// Permute applies the KeccakF-1600 permutation.
-func (d *state) Permute() {
+// permute applies the KeccakF-1600 permutation. It handles
+// any input-output buffering.
+func (d *state) permute() {
 	switch d.state {
 	case SpongeAbsorbing:
 		xorBytesFrom(d.a[:22], d.inputBuffer[:])
@@ -150,24 +128,22 @@ func (d *state) Permute() {
 	d.position = 0
 }
 
-// Pads appends the domain separation bits in dsbyte, applies
+// pads appends the domain separation bits in dsbyte, applies
 // the multi-bitrate 10..1 padding rule, and permutes the state.
-func (d *state) Pad(dsbyte byte) {
+func (d *state) pad(dsbyte byte) {
 	// Pad with this instance's domain-separator bits.
 	d.inputBuffer[d.position] ^= dsbyte
 	d.inputBuffer[d.rate-1] ^= 0x80
 	// Apply the permutation
-	d.Permute()
+	d.permute()
 	d.state = SpongeSqueezing
 	copyBytesInto(d.outputBuffer[:d.rate], d.a[:22])
 }
 
-// Absorb xors input bytes into the sponge state, applying
-// the permutation as necessary.
-//
-// The input buffer invariant:
-//     (d.position == 0) ==> (d.inputBuffer[:] == 0)
-func (d *state) Absorb(p []byte) (written int) {
+// Write absorbs more data into the hash's state.
+func (d *state) Write(p []byte) (written int, err error) {
+	// The input buffer invariant:
+	//     (d.position == 0) ==> (d.inputBuffer[:] == 0)
 	toWrite := len(p)
 	written = 0
 	for toWrite > 0 {
@@ -186,7 +162,7 @@ func (d *state) Absorb(p []byte) (written int) {
 			d.position += willWrite
 			// (0 < d.rate == d.position)
 			if d.position == d.rate {
-				d.Permute()
+				d.permute()
 				// Zero the input buffer.
 				for i := range d.inputBuffer {
 					d.inputBuffer[i] = 0
@@ -197,71 +173,39 @@ func (d *state) Absorb(p []byte) (written int) {
 		toWrite -= willWrite
 		written += willWrite
 	}
-	return int(written)
+	return int(written), nil
 }
 
-// Squeeze squeezes an arbitrary number of bytes from the sponge.
-func (d *state) Squeeze(in []byte, toSqueeze int) (out []byte) {
+// Read squeezes an arbitrary number of bytes from the sponge.
+func (d *state) Read(out []byte) (n int, err error) {
 	// Check that the sponge is in the correct state.
 	switch d.state {
 	case SpongeAbsorbing:
 		// If we're still absorbing, pad and apply the permutation.
-		d.Pad(d.dsbyte)
-	}
-
-	// If this is a fixed-output length instance, we only allow
-	// squeezing up to OutputSize() bytes; calls after outputSize
-	// bytes have been squeezed will result in no output.
-	if d.fixedOutput && toSqueeze > (d.outputSize-d.position) {
-		toSqueeze = (d.outputSize - d.position)
+		d.pad(d.dsbyte)
 	}
 
 	// Now, do the squeezing.
-	out = make([]byte, toSqueeze)
-	outOffset := 0
-	for toSqueeze != 0 {
+	offset := 0
+	length := len(out)
+	for length != 0 {
 		canSqueeze := d.rate - d.position
-		willSqueeze := minInt(toSqueeze, canSqueeze)
+		willSqueeze := minInt(length, canSqueeze)
 
 		// Copy the output from the sponge's buffer.
-		copy(out[outOffset:outOffset+willSqueeze],
+		copy(out[offset:offset+willSqueeze],
 			d.outputBuffer[d.position:d.position+willSqueeze])
 
 		d.position += willSqueeze
-		outOffset += willSqueeze
-		toSqueeze -= willSqueeze
+		offset += willSqueeze
+		length -= willSqueeze
 
 		// Apply the permutation if we've squeezed the sponge dry.
 		if d.position == d.rate {
-			d.Permute()
+			d.permute()
 		}
 	}
-	return append(in, out...)
-}
-
-// MakeOneWay overwrites SecurityStrength() / 2 bits of the state with zeros
-// and applies the permutation; after doing this, it is no longer possible
-// to use the inverse of the permutation to recover previous inputs.
-func (d *state) MakeOneWay() {
-	// TODO(dlg): Check whether padding is required by CSF-0.1
-	for i := 0; i < (keccakSpongeSize-d.rate)/8; i++ {
-		d.a[i] = 0
-	}
-	keccakF(&d.a)
-}
-
-// Functions to satisfy the hash.Hash and io.Writer interfaces:
-
-// Write absorbs bytes from the input buffer into the sponge / hash.
-func (d *state) Write(p []byte) (written int, err error) {
-	n := d.Absorb(p)
-	return n, nil
-}
-
-// Read squeezes output from the sponge / hash.
-func (d *state) Read(p []byte) (read int, err error) {
-	p = d.Squeeze(p, len(p))
-	return len(p), nil
+	return len(out), err
 }
 
 // Sum applies padding to the hash state and then squeezes out the desired
@@ -270,23 +214,25 @@ func (d *state) Sum(in []byte) []byte {
 	// Make a copy of the original hash so that caller can keep writing
 	// and summing.
 	dup := *d
-	return dup.Squeeze(in, dup.outputSize)
+	hash := make([]byte, dup.outputSize)
+	dup.Read(hash)
+	return append(in, hash...)
 }
 
-// NewSponge creates a new Keccak-based sponge instance of any
+// NewKeccakHash creates a new Keccak-based VariableHash of any
 // desired rate > 0 and < bytebufLen. Note that the resulting
 // function is *not* a SHAKE function, unless rate is 168 or 136,
 // and dsbyte == 0x1f
 //
 // By default the output size is equal to the rate minus - 1. Any
 // amount of output can be requested.
-func NewSponge(rate int, dsbyte byte) Sponge {
+func NewKeccakHash(rate int, dsbyte byte) VariableHash {
 	if rate > bufferLen || rate <= 0 {
 		return nil
 	}
 	return &state{
-		fixedOutput: false,
-		outputSize:  int(rate - 8),
-		rate:        int(rate),
-		dsbyte:      dsbyte}
+		outputSize: int(rate - 1),
+		rate:       int(rate),
+		dsbyte:     dsbyte,
+	}
 }

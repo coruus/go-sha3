@@ -30,11 +30,11 @@ var testDigests = map[string]func() hash.Hash{
 	"SHA3-256": New256,
 	"SHA3-384": New384,
 	"SHA3-512": New512,
-	"SHAKE128": NewHashShake128,
-	"SHAKE256": NewHashShake256,
+	//	"SHAKE128": newHashShake128,
+	//	"SHAKE256": newHashShake256,
 }
 
-var testShakes = map[string]func() Sponge{
+var testShakes = map[string]func() VariableHash{
 	"SHAKE128": NewShake128,
 	"SHAKE256": NewShake256,
 }
@@ -96,8 +96,8 @@ func TestKeccakKats(t *testing.T) {
 
 // dumpState is a debugging function to pretty-print the internal state of the hash.
 func (d *state) dumpState() {
-	fmt.Printf("SHA3 hash, %d B output, %db security strength (%d B rate)\n",
-		d.outputSize, d.SecurityStrength(), d.rate)
+	fmt.Printf("SHA3 hash, %d B output, %d B rate\n",
+		d.outputSize, d.rate)
 	fmt.Printf("Internal state after absorbing %d B:\n", d.position)
 
 	for x := 0; x < 5; x++ {
@@ -227,7 +227,7 @@ func BenchmarkSingleByteWrite(b *testing.B) {
 	d := NewShake256().(*state)
 	d.Reset()
 	data := sequentialBytes(1) //1 byte buffer
-	b.SetBytes(int64(d.Rate()) - 1)
+	b.SetBytes(int64(d.rate) - 1)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		d.position = 0 // Reset position to avoid ever calling the permutation function
