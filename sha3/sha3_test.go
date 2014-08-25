@@ -180,7 +180,7 @@ func TestSqueezing(t *testing.T) {
 		d1 := newVariableHash()
 		d1.Write([]byte(testString))
 		var multiple []byte
-		for _ = range ref {
+		for range ref {
 			one := make([]byte, 1)
 			d1.Read(one)
 			multiple = append(multiple, one...)
