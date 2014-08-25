@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	// The maximum rate supported for a VariableHash.
+	// MaxKeccakHashRate is the maximum rate supported for a VariableHash.
 	MaxKeccakHashRate = 176
 )
 
@@ -87,43 +87,43 @@ func (d *state) zeroBuffers() {
 // copied, including any zeros appended to the bytestring.
 //
 // Precondition: ((len(buf) + 7) / 8) <= len(a)
-func (s *state) xorBytesIn(buf []byte) int {
+func (d *state) xorBytesIn(buf []byte) int {
 	dqwords := len(buf) / 8
 	// Xor in the full ulint64s
 	for i := 0; i < dqwords; i++ {
 		a := binary.LittleEndian.Uint64(buf[i*8:])
-		s.a[i] ^= a
+		d.a[i] ^= a
 	}
 	if len(buf)%8 != 0 {
 		// Xor in the last partial ulint64.
 		last := make([]byte, 8)
 		copy(last, buf[dqwords*8:])
-		s.a[dqwords] ^= binary.LittleEndian.Uint64(last)
+		d.a[dqwords] ^= binary.LittleEndian.Uint64(last)
 	}
 
 	return ((len(buf) + 7) / 8) * 8
 }
 
 // copyBytesOut copies ulint64s to a byte buffer.
-func (s *state) copyBytesOut(buf []byte) int {
+func (d *state) copyBytesOut(buf []byte) int {
 	for i := 0; i < len(buf)/8; i++ {
-		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], s.a[i])
+		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], d.a[i])
 	}
 	return (len(buf) / 8) * 8
 }
 
 // permute applies the KeccakF-1600 permutation. It handles
 // any input-output buffering.
-func (s *state) permute() {
-	switch s.state {
+func (d *state) permute() {
+	switch d.state {
 	case spongeAbsorbing:
-		s.xorBytesIn(s.inputBuffer[:])
-		keccakF(&s.a)
+		d.xorBytesIn(d.inputBuffer[:])
+		keccakF(&d.a)
 	case spongeSqueezing:
-		keccakF(&s.a)
-		s.copyBytesOut(s.outputBuffer[:])
+		keccakF(&d.a)
+		d.copyBytesOut(d.outputBuffer[:])
 	}
-	s.position = 0
+	d.position = 0
 }
 
 // pads appends the domain separation bits in dsbyte, applies
@@ -230,19 +230,19 @@ func (d *state) Sum(in []byte) []byte {
 // Barrier overwrites "capacity" bytes of the sponge's state with zeros.
 // This makes it (computationally) infeasible to apply the inverse
 // permutation to recover previous inputs to the sponge.
-func (s *state) Barrier() {
-	switch s.state {
+func (d *state) Barrier() {
+	switch d.state {
 	case spongeAbsorbing:
 		// If we're still absorbing, pad and apply the permutation.
-		s.padAndPermute(s.dsbyte)
+		d.padAndPermute(d.dsbyte)
 	}
-	// capacity == (200 - s.rate)
-	for i := 0; i < ((200 - s.rate) / 8); i++ {
-		// s.a is a uint64 array, thus we clear capacity/8 lanes
-		s.a[i] = 0
+	// Capacity is equal to 200 - rate (in bytes)
+	for i := 0; i < ((200 - d.rate) / 8); i++ {
+		// d.a is a uint64 array, thus we clear capacity/8 lanes
+		d.a[i] = 0
 	}
-	s.zeroBuffers()
-	s.permute()
+	d.zeroBuffers()
+	d.permute()
 }
 
 // NewKeccakHash creates a new Keccak-based VariableHash with

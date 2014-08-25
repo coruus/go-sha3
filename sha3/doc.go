@@ -11,6 +11,7 @@
 //
 // Guidance (QQQQ: Is this appropriate?)
 //
+//
 // If you aren't sure what function you need, use SHAKE256 with at least
 // 64 bytes of output.
 //
@@ -35,7 +36,9 @@
 // SHAKE256 doesn't increase their collision-resistance above 128- or 256-
 // bits.)
 //
+//
 // The sponge construction
+//
 //
 // A sponge builds a pseudo-random function from a pseudo-random permutation,
 // by applying the permutation to a state of "rate + capacity" bytes, but
@@ -76,6 +79,7 @@
 //
 //
 // Recommendations, detailed
+//
 //
 // The SHAKE functions are recommended for most new uses. They can produce
 // output of arbitrary length. SHAKE256, with an output length of at least
