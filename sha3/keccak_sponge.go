@@ -2,32 +2,31 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package sha3 implements the SHA-3 fixed-output-length hash functions and
-// the SHAKE variable-output-length has function defined by FIPS-202.
-//
-// Both types of hash function use the sponge construction and
-// KeccakF-1600 permutation.
-//
-// For a detailed specification, see http://keccak.noekeon.org/
 package sha3
 
 import (
 	"encoding/binary"
+	"errors"
+)
+
+const (
+	// The maximum rate supported for a VariableHash.
+	MaxKeccakHashRate = 176
 )
 
 // SpongeDirection indicates the direction bytes are flowing through the sponge.
 type spongeDirection int
 
 const (
-	// SpongeAbsorbing indicates the sponge is absorbing input
-	SpongeAbsorbing spongeDirection = 0
-	// SpongeSqueezing indicates the sponge is being squeezed
-	SpongeSqueezing = 1
+	// spongeAbsorbing indicates the sponge is absorbing input
+	spongeAbsorbing spongeDirection = iota
+	// spongeSqueezing indicates the sponge is being squeezed
+	spongeSqueezing
 )
 
 const (
-	bufferLen        = 176 // the length of the input buffer; determines maximum rate
-	keccakSpongeSize = 200
+	bufferLen  = 176 // the length of the input buffer; determines maximum rate
+	spongeSize = 200 // the size of the permutation's state
 )
 
 type state struct {
@@ -70,7 +69,7 @@ func (d *state) Reset() {
 	for i := range d.a {
 		d.a[i] = 0
 	}
-	d.state = SpongeAbsorbing
+	d.state = spongeAbsorbing
 }
 
 func (d *state) zeroBuffers() {
@@ -88,62 +87,71 @@ func (d *state) zeroBuffers() {
 // copied, including any zeros appended to the bytestring.
 //
 // Precondition: ((len(buf) + 7) / 8) <= len(a)
-func xorBytesFrom(dqw []uint64, buf []byte) int {
+func (s *state) xorBytesIn(buf []byte) int {
 	dqwords := len(buf) / 8
 	// Xor in the full ulint64s
 	for i := 0; i < dqwords; i++ {
 		a := binary.LittleEndian.Uint64(buf[i*8:])
-		dqw[i] ^= a
+		s.a[i] ^= a
 	}
 	if len(buf)%8 != 0 {
 		// Xor in the last partial ulint64.
 		last := make([]byte, 8)
 		copy(last, buf[dqwords*8:])
-		dqw[dqwords] ^= binary.LittleEndian.Uint64(last)
+		s.a[dqwords] ^= binary.LittleEndian.Uint64(last)
 	}
 
 	return ((len(buf) + 7) / 8) * 8
 }
 
-// copyToBytebuf copies ulint64s to a byte buffer.
-// only copies floor(len(buf) / 8) * 8) bytes
-func copyBytesInto(buf []byte, dqw []uint64) int {
+// copyBytesOut copies ulint64s to a byte buffer.
+func (s *state) copyBytesOut(buf []byte) int {
 	for i := 0; i < len(buf)/8; i++ {
-		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], dqw[i])
+		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], s.a[i])
 	}
 	return (len(buf) / 8) * 8
 }
 
 // permute applies the KeccakF-1600 permutation. It handles
 // any input-output buffering.
-func (d *state) permute() {
-	switch d.state {
-	case SpongeAbsorbing:
-		xorBytesFrom(d.a[:22], d.inputBuffer[:])
-		keccakF(&d.a)
-	case SpongeSqueezing:
-		keccakF(&d.a)
-		copyBytesInto(d.outputBuffer[:], d.a[:22])
+func (s *state) permute() {
+	switch s.state {
+	case spongeAbsorbing:
+		s.xorBytesIn(s.inputBuffer[:])
+		keccakF(&s.a)
+	case spongeSqueezing:
+		keccakF(&s.a)
+		s.copyBytesOut(s.outputBuffer[:])
 	}
-	d.position = 0
+	s.position = 0
 }
 
 // pads appends the domain separation bits in dsbyte, applies
 // the multi-bitrate 10..1 padding rule, and permutes the state.
-func (d *state) pad(dsbyte byte) {
+func (d *state) padAndPermute(dsbyte byte) {
 	// Pad with this instance's domain-separator bits.
 	d.inputBuffer[d.position] ^= dsbyte
 	d.inputBuffer[d.rate-1] ^= 0x80
 	// Apply the permutation
 	d.permute()
-	d.state = SpongeSqueezing
-	copyBytesInto(d.outputBuffer[:d.rate], d.a[:22])
+	d.state = spongeSqueezing
+	d.copyBytesOut(d.outputBuffer[:d.rate])
 }
 
 // Write absorbs more data into the hash's state.
 func (d *state) Write(p []byte) (written int, err error) {
+	// Check that the sponge is in the correct state.
+	switch d.state {
+	case spongeSqueezing:
+		// QQQQ: Should this be an error? (This is how CSF and the Keccak
+		// papers describe MAC-and-continue as working, but not standardized.)
+		// If we're still squeezing, apply the permutation.
+		d.permute()
+		d.state = spongeAbsorbing
+	}
+
 	// The input buffer invariant:
-	//     (d.position == 0) ==> (d.inputBuffer[:] == 0)
+	// (d.position == 0) ==> (d.inputBuffer[:] == 0)
 	toWrite := len(p)
 	written = 0
 	for toWrite > 0 {
@@ -152,8 +160,8 @@ func (d *state) Write(p []byte) (written int, err error) {
 
 		if willWrite == d.rate {
 			// The fast path; absorb a full rate of input and apply the permutation.
-			// (willWrite == d.rate) ==> (d.position == 0) ==> d.inputBufer[:] == 0
-			xorBytesFrom(d.a[:21], p[written:written+willWrite])
+			// (willWrite == d.rate) <==> (d.position == 0) ==> (d.inputBufer[:] == 0)
+			d.xorBytesIn(p[written : written+willWrite])
 			keccakF(&d.a)
 		} else {
 			// The slow path; buffer the input until we can fill the sponge,
@@ -180,9 +188,9 @@ func (d *state) Write(p []byte) (written int, err error) {
 func (d *state) Read(out []byte) (n int, err error) {
 	// Check that the sponge is in the correct state.
 	switch d.state {
-	case SpongeAbsorbing:
+	case spongeAbsorbing:
 		// If we're still absorbing, pad and apply the permutation.
-		d.pad(d.dsbyte)
+		d.padAndPermute(d.dsbyte)
 	}
 
 	// Now, do the squeezing.
@@ -219,20 +227,44 @@ func (d *state) Sum(in []byte) []byte {
 	return append(in, hash...)
 }
 
-// NewKeccakHash creates a new Keccak-based VariableHash of any
-// desired rate > 0 and < bytebufLen. Note that the resulting
+// Barrier overwrites "capacity" bytes of the sponge's state with zeros.
+// This makes it (computationally) infeasible to apply the inverse
+// permutation to recover previous inputs to the sponge.
+func (s *state) Barrier() {
+	switch s.state {
+	case spongeAbsorbing:
+		// If we're still absorbing, pad and apply the permutation.
+		s.padAndPermute(s.dsbyte)
+	}
+	// capacity == (200 - s.rate)
+	for i := 0; i < ((200 - s.rate) / 8); i++ {
+		// s.a is a uint64 array, thus we clear capacity/8 lanes
+		s.a[i] = 0
+	}
+	s.zeroBuffers()
+	s.permute()
+}
+
+// NewKeccakHash creates a new Keccak-based VariableHash with
+// 8 <= rate <= maxrate && (rate % 8) == 0. Note that the resulting
 // function is *not* a SHAKE function, unless rate is 168 or 136,
-// and dsbyte == 0x1f
+// and dsbyte == 0x1f.
 //
-// By default the output size is equal to the rate minus - 1. Any
-// amount of output can be requested.
-func NewKeccakHash(rate int, dsbyte byte) VariableHash {
-	if rate > bufferLen || rate <= 0 {
-		return nil
+// Please understand the sponge construction before using this
+// function. You almost certainly should be using something else.
+//
+// (The security strength, in bytes, is equal to (200 - rate) / 2.)
+//
+func NewKeccakHash(rate int, dsbyte byte) (VariableHash, error) {
+	switch {
+	case rate > MaxKeccakHashRate || rate < 8:
+		return nil, errors.New("Rate must be greater than or equal to 8 and less than MaxKeccakHashRate.")
+	case (rate % 8) != 0:
+		return nil, errors.New("Rate must be equal to 0 mod 8")
 	}
 	return &state{
 		outputSize: int(rate - 1),
 		rate:       int(rate),
 		dsbyte:     dsbyte,
-	}
+	}, nil
 }

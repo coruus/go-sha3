@@ -24,12 +24,12 @@ const (
 	SHA512                    // import crypto/sha512
 	MD5SHA1                   // no implementation; MD5+SHA1 used for TLS RSA
 	RIPEMD160                 // import code.google.com/p/go.crypto/ripemd160
-	SHA3_224
-	SHA3_256
-	SHA3_384
-	SHA3_512
-	SHAKE128
-	SHAKE256
+	SHA3_224                  // import code.google.com/p/go.crypto/sha3
+	SHA3_256                  // import code.google.com/p/go.crypto/sha3
+	SHA3_384                  // import code.google.com/p/go.crypto/sha3
+	SHA3_512                  // import code.google.com/p/go.crypto/sha3
+	SHAKE128                  // import code.google.com/p/go.crypto/sha3
+	SHAKE256                  // import code.google.com/p/go.crypto/sha3
 	maxHash
 )
 

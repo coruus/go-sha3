@@ -4,15 +4,17 @@
 
 package sha3
 
-// TODO(update comment): These tests are a subset of those provided by the Keccak web site
-// (http://keccak.noekeon.org/).
+// Tests include all the ShortMsgKATs provided by the Keccak team at
+// https://github.com/gvanas/KeccakCodePackage
+//
+// They only include the zero-bit case of the utterly useless bitwise
+// testvectors published by NIST in the draft of FIPS-202.
 
 import (
 	"bytes"
 	"compress/flate"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"hash"
 	"os"
 	"strings"
@@ -70,8 +72,9 @@ type KeccakKats struct {
 
 // TestKeccakKats tests the SHA-3 and Shake implementations against all the
 // ShortMsgKATs from https://github.com/gvanas/KeccakCodePackage
-// (The testvectors are stored in keccakKats.json due to their length.)
+// (The testvectors are stored in keccakKats.json.deflate due to their length.)
 func TestKeccakKats(t *testing.T) {
+	// Read the KATs.
 	deflated, err := os.Open(katFilename)
 	if err != nil {
 		t.Errorf("Error opening %s: %s", katFilename, err)
@@ -83,6 +86,8 @@ func TestKeccakKats(t *testing.T) {
 	if err != nil {
 		t.Errorf("%s", err)
 	}
+
+	// Do the KATs.
 	for functionName, kats := range katSet.Kats {
 		d := testDigests[functionName]()
 		t.Logf("%s", functionName)
@@ -102,20 +107,6 @@ func TestKeccakKats(t *testing.T) {
 				t.FailNow()
 			}
 		}
-	}
-}
-
-// dumpState is a debugging function to pretty-print the internal state of the hash.
-func (d *state) dumpState() {
-	fmt.Printf("SHA3 hash, %d B output, %d B rate\n",
-		d.outputSize, d.rate)
-	fmt.Printf("Internal state after absorbing %d B:\n", d.position)
-
-	for x := 0; x < 5; x++ {
-		for y := 0; y < 5; y++ {
-			fmt.Printf("%v, ", d.a[x*5+y])
-		}
-		fmt.Println("")
 	}
 }
 
@@ -146,6 +137,7 @@ func TestUnalignedWrite(t *testing.T) {
 	}
 }
 
+// Test that appending works when reallocation is necessary.
 func TestAppend(t *testing.T) {
 	d := New224()
 
@@ -163,6 +155,7 @@ func TestAppend(t *testing.T) {
 	}
 }
 
+// Test that appending works when no reallocation is necessary.
 func TestAppendNoRealloc(t *testing.T) {
 	buf := make([]byte, 1, 200)
 	d := New224()
@@ -176,25 +169,35 @@ func TestAppendNoRealloc(t *testing.T) {
 
 // TestSqueezing checks that squeezing the full output a single time produces
 // the same output as repeatedly squeezing the instance.
-/*
 func TestSqueezing(t *testing.T) {
-	for functionName, newHash := range testShakes {
+	for functionName, newVariableHash := range testShakes {
 		t.Logf("%s", functionName)
-		d0 := newHash().(*state)
+		d0 := newVariableHash()
 		d0.Write([]byte(testString))
-		ref := d0.Sum(nil)
+		ref := make([]byte, 32)
+		d0.Read(ref)
 
-		d1 := newHash().(*state)
+		d1 := newVariableHash()
 		d1.Write([]byte(testString))
-		multiple := d1.Squeeze(nil, 0)
+		var multiple []byte
 		for _ = range ref {
-			multiple = d1.Squeeze(multiple, 1)
+			one := make([]byte, 1)
+			d1.Read(one)
+			multiple = append(multiple, one...)
 		}
 		if !bytes.Equal(ref, multiple) {
 			t.Errorf("squeezing %d bytes one at a time failed", len(ref))
 		}
 	}
-}*/
+}
+
+func TestReadSimulation(t *testing.T) {
+	d := NewShake256()
+	d.Write(nil)
+	dwr := make([]byte, 32)
+	d.Read(dwr)
+
+}
 
 // sequentialBytes produces a buffer of size consecutive bytes 0x00, 0x01, ..., used for testing.
 func sequentialBytes(size int) []byte {
@@ -203,24 +206,6 @@ func sequentialBytes(size int) []byte {
 		result[i] = byte(i)
 	}
 	return result
-}
-
-// benchmarkBlockWrite tests the speed of writing data and never calling the permutation function.
-func benchmarkBlockWrite(b *testing.B, h hash.Hash) {
-	d := h.(*state)
-	b.StopTimer()
-	d.Reset()
-	// Write all but the last byte of a block, to ensure that the permutation is not called.
-	data := sequentialBytes(d.rate - 1)
-	b.SetBytes(int64(len(data)))
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		d.position = 0 // Reset absorbed to avoid ever calling the permutation function
-		d.Write(data)
-		xorBytesFrom(d.a[:], d.inputBuffer[:])
-	}
-	b.StopTimer()
-	d.Reset()
 }
 
 // BenchmarkPermutationFunction measures the speed of the permutation function
@@ -233,39 +218,10 @@ func BenchmarkPermutationFunction(b *testing.B) {
 	}
 }
 
-// BenchmarkSingleByteWrite tests the latency from writing a single byte
-func BenchmarkSingleByteWrite(b *testing.B) {
-	b.StopTimer()
-	d := NewShake256().(*state)
-	d.Reset()
-	data := sequentialBytes(1) //1 byte buffer
-	b.SetBytes(int64(d.rate) - 1)
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		d.position = 0 // Reset position to avoid ever calling the permutation function
-
-		// Write all but the last byte of a block, one byte at a time.
-		for j := 0; j < d.rate-1; j++ {
-			d.Write(data)
-		}
-	}
-	b.StopTimer()
-	d.Reset()
-}
-
-// BenchmarkSingleByteX measures the block write speed for each size of the state.
-func BenchmarkBlockWrite512(b *testing.B)      { benchmarkBlockWrite(b, New512()) }
-func BenchmarkBlockWrite384(b *testing.B)      { benchmarkBlockWrite(b, New384()) }
-func BenchmarkBlockWrite256(b *testing.B)      { benchmarkBlockWrite(b, New256()) }
-func BenchmarkBlockWrite224(b *testing.B)      { benchmarkBlockWrite(b, New224()) }
-func BenchmarkBlockWriteShake256(b *testing.B) { benchmarkBlockWrite(b, newHashShake256()) }
-func BenchmarkBlockWriteShake128(b *testing.B) { benchmarkBlockWrite(b, newHashShake128()) }
-
-// benchmarkBulkHash tests the speed to hash a 16 KiB buffer.
-func benchmarkBulkHash(b *testing.B, h hash.Hash) {
+// benchmarkBulkHash tests the speed to hash a buffer of buflen.
+func benchmarkBulkHash(b *testing.B, h hash.Hash, size int) {
 	b.StopTimer()
 	h.Reset()
-	size := 1 << 14
 	data := sequentialBytes(size)
 	b.SetBytes(int64(size))
 	b.StartTimer()
@@ -279,27 +235,12 @@ func benchmarkBulkHash(b *testing.B, h hash.Hash) {
 	h.Reset()
 }
 
-// benchmarkBulkKeccakX test the speed to hash a 16 KiB buffer by calling benchmarkBulkHash.
-func BenchmarkBulkSha3_512(b *testing.B) { benchmarkBulkHash(b, New512()) }
-func BenchmarkBulkSha3_384(b *testing.B) { benchmarkBulkHash(b, New384()) }
-func BenchmarkBulkSha3_256(b *testing.B) { benchmarkBulkHash(b, New256()) }
-func BenchmarkBulkSha3_224(b *testing.B) { benchmarkBulkHash(b, New224()) }
-func BenchmarkBulkShake256(b *testing.B) { benchmarkBlockWrite(b, newHashShake256()) }
-func BenchmarkBulkShake128(b *testing.B) { benchmarkBlockWrite(b, newHashShake128()) }
+func BenchmarkSha3_512_MTU(b *testing.B) { benchmarkBulkHash(b, New512(), 1350) }
+func BenchmarkSha3_384_MTU(b *testing.B) { benchmarkBulkHash(b, New384(), 1350) }
+func BenchmarkSha3_256_MTU(b *testing.B) { benchmarkBulkHash(b, New256(), 1350) }
+func BenchmarkSha3_224_MTU(b *testing.B) { benchmarkBulkHash(b, New224(), 1350) }
+func BenchmarkShake256_MTU(b *testing.B) { benchmarkBulkHash(b, newHashShake256(), 1350) }
+func BenchmarkShake128_MTU(b *testing.B) { benchmarkBulkHash(b, newHashShake128(), 1350) }
 
-func benchmarkSize(b *testing.B, size int) {
-	var bench = New256()
-	var buf = make([]byte, 8192)
-
-	b.SetBytes(int64(size))
-	sum := make([]byte, bench.Size())
-	for i := 0; i < b.N; i++ {
-		bench.Reset()
-		bench.Write(buf[:size])
-		bench.Sum(sum[:0])
-	}
-}
-
-func BenchmarkHash8B(b *testing.B)   { benchmarkSize(b, 8) }
-func BenchmarkHash1KiB(b *testing.B) { benchmarkSize(b, 1024) }
-func BenchmarkHash8KiB(b *testing.B) { benchmarkSize(b, 8192) }
+func BenchmarkSha3_512_1MiB(b *testing.B) { benchmarkBulkHash(b, New512(), 1<<20) }
+func BenchmarkShake256_1MiB(b *testing.B) { benchmarkBulkHash(b, newHashShake256(), 1<<20) }

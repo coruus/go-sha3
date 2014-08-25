@@ -1,6 +1,7 @@
 // Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
 package sha3
 
 import (
@@ -13,10 +14,15 @@ type VariableHash interface {
 	// Write absorbs more data into the hash's state.
 	// It never returns an error.
 	io.Writer
-	// Read reads more output from the hash. It affects the hash's
-	// state.
+	// Read reads more output from the hash; reading affects the hash's
+	// state. (VariableHash.Read is thus very different from Hash.Sum)
 	// It never returns an error.
 	io.Reader
+
+	// Barrier overwrites (200 - rate) bytes of the hash's state
+	// with zeros, making it computationally infeasible to recover
+	// previous inputs.
+	Barrier()
 
 	// Reset resets the Hash to its initial state.
 	Reset()
