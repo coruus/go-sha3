@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package sha3
+package keccak
 
 // This file implements the KeccakF-1600 permutation used by SHA-3.
 //
@@ -38,11 +38,9 @@ var rc = [24]uint64{
 	0x8000000080008008,
 }
 
-// keccakF computes the complete Keccak-f function consisting of 24 rounds
-// with a different constant (rc) in each round. This implementation fully
-// unrolls the round function to avoid inner loops, as well as pre-calculating
-// shift offsets.
-func keccakF(a *[25]uint64) {
+// KeccakF applies the KeccakF[1600] permutation to a 1600 bit wide
+// state of 5x5 64-bit uints.
+func KeccakF(a *[25]uint64) {
 	var t, bc0, bc1, bc2, bc3, bc4 uint64
 	for _, roundConstant := range rc {
 		// θ step
