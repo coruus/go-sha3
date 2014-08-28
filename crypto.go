@@ -28,8 +28,6 @@ const (
 	SHA3_256                  // import code.google.com/p/go.crypto/sha3
 	SHA3_384                  // import code.google.com/p/go.crypto/sha3
 	SHA3_512                  // import code.google.com/p/go.crypto/sha3
-	SHAKE128                  // import code.google.com/p/go.crypto/sha3
-	SHAKE256                  // import code.google.com/p/go.crypto/sha3
 	maxHash
 )
 
@@ -45,8 +43,6 @@ var digestSizes = []uint8{
 	SHA3_256:  32,
 	SHA3_384:  48,
 	SHA3_512:  64,
-	SHAKE128:  32,
-	SHAKE256:  64,
 	MD5SHA1:   36,
 	RIPEMD160: 20,
 }

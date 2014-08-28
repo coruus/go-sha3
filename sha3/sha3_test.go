@@ -19,6 +19,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"code.google.com/p/go.crypto/sha3/keccak"
 )
 
 const (
@@ -47,7 +49,7 @@ var testDigests = map[string]func() hash.Hash{
 }
 
 // testShakes contains
-var testShakes = map[string]func() VariableHash{
+var testShakes = map[string]func() ShakeHash{
 	"SHAKE128": NewShake128,
 	"SHAKE256": NewShake256,
 }
@@ -103,7 +105,7 @@ func TestKeccakKats(t *testing.T) {
 			if got != want {
 				t.Errorf("function=%s, length=%d\nmessage:\n  %s\ngot:\n  %s\nwanted:\n %s",
 					functionName, kat.Length, kat.Message, got, want)
-				t.Logf("wanted %r", kat)
+				t.Logf("wanted %+v", kat)
 				t.FailNow()
 			}
 		}
@@ -170,14 +172,14 @@ func TestAppendNoRealloc(t *testing.T) {
 // TestSqueezing checks that squeezing the full output a single time produces
 // the same output as repeatedly squeezing the instance.
 func TestSqueezing(t *testing.T) {
-	for functionName, newVariableHash := range testShakes {
+	for functionName, newShakeHash := range testShakes {
 		t.Logf("%s", functionName)
-		d0 := newVariableHash()
+		d0 := newShakeHash()
 		d0.Write([]byte(testString))
 		ref := make([]byte, 32)
 		d0.Read(ref)
 
-		d1 := newVariableHash()
+		d1 := newShakeHash()
 		d1.Write([]byte(testString))
 		var multiple []byte
 		for range ref {
@@ -214,7 +216,7 @@ func BenchmarkPermutationFunction(b *testing.B) {
 	b.SetBytes(int64(200))
 	var lanes [25]uint64
 	for i := 0; i < b.N; i++ {
-		keccakF(&lanes)
+		keccak.F1600(&lanes)
 	}
 }
 

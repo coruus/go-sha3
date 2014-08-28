@@ -4,7 +4,7 @@
 
 package sha3
 
-// This file defines the VariableHash interface, and provides
+// This file defines the ShakeHash interface, and provides
 // functions for creating SHAKE instances, as well as utility
 // functions for hashing bytes to arbitrary-length output.
 
@@ -12,14 +12,14 @@ import (
 	"io"
 )
 
-// VariableHash defines the interface to hash functions that
+// Shake defines the interface to hash functions that
 // support arbitrary-length output.
-type VariableHash interface {
+type ShakeHash interface {
 	// Write absorbs more data into the hash's state.
 	// It never returns an error.
 	io.Writer
 	// Read reads more output from the hash; reading affects the hash's
-	// state. (VariableHash.Read is thus very different from Hash.Sum)
+	// state. (Shake.Read is thus very different from Hash.Sum)
 	// It never returns an error.
 	io.Reader
 
@@ -35,12 +35,12 @@ type VariableHash interface {
 // NewShake128 creates a new SHAKE128 variable-output-length Sponge.
 // Its generic security strength is 128 bits against all attacks if at
 // least 32 bytes of its output are used.
-func NewShake128() VariableHash { return &state{rate: 168, dsbyte: 0x1f} }
+func NewShake128() ShakeHash { return &state{rate: 168, dsbyte: 0x1f} }
 
 // NewShake256 creates a new SHAKE128 variable-output-length Sponge.
 // Its generic security strength is 256 bits against all attacks if
 // at least 64 bytes of its output are used.
-func NewShake256() VariableHash { return &state{rate: 136, dsbyte: 0x1f} }
+func NewShake256() ShakeHash { return &state{rate: 136, dsbyte: 0x1f} }
 
 // ShakeSum128 writes an arbitrary-length digest of data into hash.
 func ShakeSum128(hash, data []byte) {

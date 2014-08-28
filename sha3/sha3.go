@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	// MaxKeccakHashRate is the maximum rate supported for a VariableHash.
+	// MaxKeccakHashRate is the maximum rate supported for a ShakeHash.
 	MaxKeccakHashRate = 176
 )
 
@@ -120,9 +120,9 @@ func (d *state) permute() {
 	switch d.state {
 	case spongeAbsorbing:
 		d.xorBytesIn(d.inputBuffer[:])
-		keccak.KeccakF(&d.a)
+		keccak.F1600(&d.a)
 	case spongeSqueezing:
-		keccak.KeccakF(&d.a)
+		keccak.F1600(&d.a)
 		d.copyBytesOut(d.outputBuffer[:])
 	}
 	d.position = 0
@@ -164,7 +164,7 @@ func (d *state) Write(p []byte) (written int, err error) {
 			// The fast path; absorb a full rate of input and apply the permutation.
 			// (willWrite == d.rate) <==> (d.position == 0) ==> (d.inputBufer[:] == 0)
 			d.xorBytesIn(p[written : written+willWrite])
-			keccak.KeccakF(&d.a)
+			keccak.F1600(&d.a)
 		} else {
 			// The slow path; buffer the input until we can fill the sponge,
 			// and then xor it in.
@@ -247,7 +247,7 @@ func (d *state) Barrier() {
 	d.permute()
 }
 
-// NewKeccakHash creates a new Keccak-based VariableHash with
+// NewKeccakHash creates a new Keccak-based ShakeHash with
 // 8 <= rate <= maxrate && (rate % 8) == 0. Note that the resulting
 // function is *not* a SHAKE function, unless rate is 168 or 136,
 // and dsbyte == 0x1f.
@@ -257,7 +257,7 @@ func (d *state) Barrier() {
 //
 // (The security strength, in bytes, is equal to (200 - rate) / 2.)
 //
-func NewKeccakHash(rate int, dsbyte byte) (VariableHash, error) {
+func NewKeccakHash(rate int, dsbyte byte) (ShakeHash, error) {
 	switch {
 	case rate > MaxKeccakHashRate || rate < 8:
 		return nil, errors.New("Rate must be greater than or equal to 8 and less than MaxKeccakHashRate.")

@@ -4,8 +4,11 @@ Updated version of "code.gooogle.com/p/go.crypto/sha3".
 
 (Intended to be upstreamed.)
 
-Design decisions:
+Some dogfooding:
 
-  - Endianness is the responsibility of the permutation.
-  - The "sponge" code operates on byte slices only.
+  cmd/shake256sum: Computes a 64-byte Shake256 digest of
+  files (or standard input). Accepts a -mackey parameter
+  to make a MAC.
 
+  a6: A package that implements a type A6 generic composition
+  of Shake256 and XSalsa20
