@@ -8,42 +8,35 @@ package sha3
 // and SHAKE hash functions, as well as utility functions for hashing
 // bytes.
 
-import "hash"
+import (
+	"hash"
+)
 
-/*
-func init() {
-	crypto.RegisterHash(crypto.SHA3_224, New224)
-	crypto.RegisterHash(crypto.SHA3_256, New256)
-	crypto.RegisterHash(crypto.SHA3_384, New384)
-	crypto.RegisterHash(crypto.SHA3_512, New512)
-}*/
-
-// New224 creates a new SHA3-224 hash
+// New224 creates a new SHA3-224 hash.
 // Its generic security strength is 224 bits against preimage attacks,
 // and 112 bits against collision attacks.
-func New224() hash.Hash { return &state{rate: 144, outputSize: 28, dsbyte: 0x06} }
+func New224() hash.Hash { return &state{rate: 144, outputLen: 28, dsbyte: 0x06} }
 
-// New256 creates a new SHA3-256 hash
+// New256 creates a new SHA3-256 hash.
 // Its generic security strength is 256 bits against preimage attacks,
 // and 128 bits against collision attacks.
-func New256() hash.Hash { return &state{rate: 136, outputSize: 32, dsbyte: 0x06} }
+func New256() hash.Hash { return &state{rate: 136, outputLen: 32, dsbyte: 0x06} }
 
-// New384 creates a new SHA3-384 hash
+// New384 creates a new SHA3-384 hash.
 // Its generic security strength is 384 bits against preimage attacks,
 // and 192 bits against collision attacks.
-func New384() hash.Hash { return &state{rate: 104, outputSize: 48, dsbyte: 0x06} }
+func New384() hash.Hash { return &state{rate: 104, outputLen: 48, dsbyte: 0x06} }
 
-// New512 creates a new SHA3-512 hash.Hash
+// New512 creates a new SHA3-512 hash.
 // Its generic security strength is 512 bits against preimage attacks,
 // and 256 bits against collision attacks.
-func New512() hash.Hash { return &state{rate: 72, outputSize: 64, dsbyte: 0x06} }
+func New512() hash.Hash { return &state{rate: 72, outputLen: 64, dsbyte: 0x06} }
 
 // Sum224 returns the SHA3-224 digest of the data.
 func Sum224(data []byte) (digest [28]byte) {
 	h := New224()
 	h.Write(data)
-	sum := h.Sum(nil)
-	copy(digest[:], sum)
+	h.Sum(digest[:0])
 	return
 }
 
@@ -51,8 +44,7 @@ func Sum224(data []byte) (digest [28]byte) {
 func Sum256(data []byte) (digest [32]byte) {
 	h := New256()
 	h.Write(data)
-	sum := h.Sum(nil)
-	copy(digest[:], sum)
+	h.Sum(digest[:0])
 	return
 }
 
@@ -60,8 +52,7 @@ func Sum256(data []byte) (digest [32]byte) {
 func Sum384(data []byte) (digest [48]byte) {
 	h := New384()
 	h.Write(data)
-	sum := h.Sum(nil)
-	copy(digest[:], sum)
+	h.Sum(digest[:0])
 	return
 }
 
@@ -69,7 +60,6 @@ func Sum384(data []byte) (digest [48]byte) {
 func Sum512(data []byte) (digest [64]byte) {
 	h := New512()
 	h.Write(data)
-	sum := h.Sum(nil)
-	copy(digest[:], sum)
+	h.Sum(digest[:0])
 	return
 }

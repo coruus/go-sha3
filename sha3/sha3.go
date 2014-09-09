@@ -6,110 +6,106 @@ package sha3
 
 import (
 	"encoding/binary"
-	"errors"
 )
 
-const (
-	// MaxKeccakHashRate is the maximum rate supported for a ShakeHash.
-	MaxKeccakHashRate = 176
-)
-
-// SpongeDirection indicates the direction bytes are flowing through the sponge.
+// spongeDirection indicates the direction bytes are flowing through the sponge.
 type spongeDirection int
 
 const (
-	// spongeAbsorbing indicates the sponge is absorbing input
+	// spongeAbsorbing indicates that the sponge is absorbing input.
 	spongeAbsorbing spongeDirection = iota
-	// spongeSqueezing indicates the sponge is being squeezed
+	// spongeSqueezing indicates that the sponge is being squeezed.
 	spongeSqueezing
 )
 
 const (
-	bufferLen  = 176 // the length of the input buffer; determines maximum rate
-	spongeSize = 200 // the size of the permutation's state
+	// maxRate is the maximum size of the internal buffer. SHAKE-256
+	// currently needs the largest buffer.
+	maxRate = 168
 )
 
 type state struct {
-	// Generic sponge components
-	a            [25]uint64      // main state of the hash
-	inputBuffer  [bufferLen]byte // the input buffer
-	outputBuffer [bufferLen]byte // the output buffer
-	position     int             // position in the input buffer
-	rate         int             // the number of bytes of state to use
+	// Generic sponge components.
+	a    [25]uint64 // main state of the hash
+	buf  []byte     // points into storage
+	rate int        // the number of bytes of state to use
 
-	// Specific to multi-bitrate padding
-	dsbyte byte // the domain separator byte
+	// dsbyte contains the "domain separator" and the first bit of the padding.
+	//
+	// In sections 6.1 and 6.2 of [1], SHA-3 and SHAKE are defined with bits
+	// appended to the message: "01" for SHA-3 and "1111" for SHAKE. Because
+	// [1] numbers bits from the LSB, this results in 00000010b and 00001111b,
+	// respectively. Then the padding rule of section 5.1 is applied to pad the
+	// message to a multiple of the rate, which involves adding a "1" bit, zero
+	// or more "0" bits and then a final "1" bit. The first "set" bit from the
+	// padding is included in the value of dsbyte, giving 00000110b (0x06) and
+	// 00011111b (0x1f), respectively.
+	//
+	// [1] http://csrc.nist.gov/publications/drafts/fips-202/fips_202_draft.pdf
+	dsbyte  byte
+	storage [maxRate]byte
 
-	// Specific to SHA-3 and SHAKE
+	// Specific to SHA-3 and SHAKE.
 	fixedOutput bool            // whether this is a fixed-ouput-length instance
-	outputSize  int             // the default output size in bytes
+	outputLen   int             // the default output size in bytes
 	state       spongeDirection // current direction of the sponge
-}
-
-// minInt returns the lesser of two integer arguments.
-func minInt(v1, v2 int) int {
-	if v1 <= v2 {
-		return v1
-	}
-	return v2
 }
 
 // BlockSize returns the rate of sponge underlying this hash function.
 func (d *state) BlockSize() int { return d.rate }
 
 // Size returns the output size of the hash function in bytes.
-func (d *state) Size() int { return d.outputSize }
+func (d *state) Size() int { return d.outputLen }
 
 // Reset clears the internal state by zeroing the sponge state and
 // the byte buffer, and setting Sponge.state to absorbing.
 func (d *state) Reset() {
-	d.position = 0  // Reset position.
-	d.zeroBuffers() // Zero buffers.
 	// Zero the permutation's state.
 	for i := range d.a {
 		d.a[i] = 0
 	}
 	d.state = spongeAbsorbing
+	d.buf = d.storage[:0]
 }
 
-func (d *state) zeroBuffers() {
-	d.position = 0
-	for i := range d.inputBuffer {
-		d.inputBuffer[i] = 0
+func (d *state) clone() *state {
+	ret := *d
+	if ret.state == spongeAbsorbing {
+		ret.buf = ret.storage[:len(ret.buf)]
+	} else {
+		ret.buf = ret.storage[d.rate-cap(d.buf) : d.rate]
 	}
-	for i := range d.outputBuffer {
-		d.outputBuffer[i] = 0
-	}
+
+	return &ret
 }
 
-// xorBytesInto xors a buffer into the state, byte-swapping to
+// xorIn xors a buffer into the state, byte-swapping to
 // little-endian as necessary; it returns the number of bytes
 // copied, including any zeros appended to the bytestring.
-//
-// Precondition: ((len(buf) + 7) / 8) <= len(a)
-func (d *state) xorBytesIn(buf []byte) int {
-	dqwords := len(buf) / 8
-	// Xor in the full ulint64s
-	for i := 0; i < dqwords; i++ {
-		a := binary.LittleEndian.Uint64(buf[i*8:])
-		d.a[i] ^= a
-	}
-	if len(buf)%8 != 0 {
-		// Xor in the last partial ulint64.
-		last := make([]byte, 8)
-		copy(last, buf[dqwords*8:])
-		d.a[dqwords] ^= binary.LittleEndian.Uint64(last)
-	}
+func (d *state) xorIn(buf []byte) {
+	n := len(buf) / 8
 
-	return ((len(buf) + 7) / 8) * 8
+	for i := 0; i < n; i++ {
+		a := binary.LittleEndian.Uint64(buf)
+		d.a[i] ^= a
+		buf = buf[8:]
+	}
+	if len(buf) != 0 {
+		// XOR in the last partial ulint64.
+		a := uint64(0)
+		for i, v := range buf {
+			a |= uint64(v) << uint64(8*i)
+		}
+		d.a[n] ^= a
+	}
 }
 
-// copyBytesOut copies ulint64s to a byte buffer.
-func (d *state) copyBytesOut(buf []byte) int {
-	for i := 0; i < len(buf)/8; i++ {
-		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], d.a[i])
+// copyOut copies ulint64s to a byte buffer.
+func (d *state) copyOut(b []byte) {
+	for i := 0; len(b) >= 8; i++ {
+		binary.LittleEndian.PutUint64(b, d.a[i])
+		b = b[8:]
 	}
-	return (len(buf) / 8) * 8
 }
 
 // permute applies the KeccakF-1600 permutation. It handles
@@ -117,103 +113,105 @@ func (d *state) copyBytesOut(buf []byte) int {
 func (d *state) permute() {
 	switch d.state {
 	case spongeAbsorbing:
-		d.xorBytesIn(d.inputBuffer[:])
-		KeccakF1600(&d.a)
+		// If we're absorbing, we need to xor the input into the state
+		// before applying the permutation.
+		d.xorIn(d.buf)
+		d.buf = d.storage[:0]
+		keccakF1600(&d.a)
 	case spongeSqueezing:
-		KeccakF1600(&d.a)
-		d.copyBytesOut(d.outputBuffer[:])
+		// If we're squeezing, we need to apply the permutation before
+		// copying more output.
+		keccakF1600(&d.a)
+		d.buf = d.storage[:d.rate]
+		d.copyOut(d.buf)
 	}
-	d.position = 0
 }
 
 // pads appends the domain separation bits in dsbyte, applies
 // the multi-bitrate 10..1 padding rule, and permutes the state.
 func (d *state) padAndPermute(dsbyte byte) {
-	// Pad with this instance's domain-separator bits.
-	d.inputBuffer[d.position] ^= dsbyte
-	d.inputBuffer[d.rate-1] ^= 0x80
-	// Apply the permutation
+	if d.buf == nil {
+		d.buf = d.storage[:0]
+	}
+	// Pad with this instance's domain-separator bits. We know that there's
+	// at least one byte of space in d.buf because, if it were full,
+	// permute would have been called to empty it. dsbyte also contains the
+	// first one bit for the padding. See the comment in the state struct.
+	d.buf = append(d.buf, dsbyte)
+	zerosStart := len(d.buf)
+	d.buf = d.storage[:d.rate]
+	for i := zerosStart; i < d.rate; i++ {
+		d.buf[i] = 0
+	}
+	// This adds the final one bit for the padding. Because of the way that
+	// bits are numbered from the LSB upwards, the final bit is the MSB of
+	// the last byte.
+	d.buf[d.rate-1] ^= 0x80
+	// Apply the permutation.
 	d.permute()
 	d.state = spongeSqueezing
-	d.copyBytesOut(d.outputBuffer[:d.rate])
+	d.buf = d.storage[:d.rate]
+	d.copyOut(d.buf)
 }
 
-// Write absorbs more data into the hash's state.
+// Write absorbs more data into the hash's state. It produces an error
+// if more data is written to the ShakeHash after writing
 func (d *state) Write(p []byte) (written int, err error) {
-	// Check that the sponge is in the correct state.
-	switch d.state {
-	case spongeSqueezing:
-		// QQQQ: Should this be an error? (This is how CSF and the Keccak
-		// papers describe MAC-and-continue as working, but not standardized.)
-		// If we're still squeezing, apply the permutation.
-		d.permute()
-		d.state = spongeAbsorbing
+	if d.state != spongeAbsorbing {
+		panic("sha3: write to sponge after read")
 	}
+	if d.buf == nil {
+		d.buf = d.storage[:0]
+	}
+	written = len(p)
 
-	// The input buffer invariant:
-	// (d.position == 0) ==> (d.inputBuffer[:] == 0)
-	toWrite := len(p)
-	written = 0
-	for toWrite > 0 {
-		canWrite := d.rate - d.position
-		willWrite := minInt(toWrite, canWrite)
-
-		if willWrite == d.rate {
-			// The fast path; absorb a full rate of input and apply the permutation.
-			// (willWrite == d.rate) <==> (d.position == 0) ==> (d.inputBufer[:] == 0)
-			d.xorBytesIn(p[written : written+willWrite])
-			KeccakF1600(&d.a)
+	for len(p) > 0 {
+		if len(d.buf) == 0 && len(p) >= d.rate {
+			// The fast path; absorb a full "rate" bytes of input and apply the permutation.
+			d.xorIn(p[:d.rate])
+			p = p[d.rate:]
+			keccakF1600(&d.a)
 		} else {
-			// The slow path; buffer the input until we can fill the sponge,
-			// and then xor it in.
-			copy(d.inputBuffer[d.position:], p[written:written+willWrite])
-			d.position += willWrite
-			// (0 < d.rate == d.position)
-			if d.position == d.rate {
+			// The slow path; buffer the input until we can fill the sponge, and then xor it in.
+			todo := d.rate - len(d.buf)
+			if todo > len(p) {
+				todo = len(p)
+			}
+			d.buf = append(d.buf, p[:todo]...)
+			p = p[todo:]
+
+			// If the sponge is full, apply the permutation.
+			if len(d.buf) == d.rate {
 				d.permute()
-				// Zero the input buffer.
-				for i := range d.inputBuffer {
-					d.inputBuffer[i] = 0
-				}
-				d.position = 0
 			}
 		}
-		toWrite -= willWrite
-		written += willWrite
 	}
-	return int(written), nil
+
+	return
 }
 
 // Read squeezes an arbitrary number of bytes from the sponge.
 func (d *state) Read(out []byte) (n int, err error) {
-	// Check that the sponge is in the correct state.
-	switch d.state {
-	case spongeAbsorbing:
-		// If we're still absorbing, pad and apply the permutation.
+	// If we're still absorbing, pad and apply the permutation.
+	if d.state == spongeAbsorbing {
 		d.padAndPermute(d.dsbyte)
 	}
 
+	n = len(out)
+
 	// Now, do the squeezing.
-	offset := 0
-	length := len(out)
-	for length != 0 {
-		canSqueeze := d.rate - d.position
-		willSqueeze := minInt(length, canSqueeze)
-
-		// Copy the output from the sponge's buffer.
-		copy(out[offset:offset+willSqueeze],
-			d.outputBuffer[d.position:d.position+willSqueeze])
-
-		d.position += willSqueeze
-		offset += willSqueeze
-		length -= willSqueeze
+	for len(out) > 0 {
+		n := copy(out, d.buf)
+		d.buf = d.buf[n:]
+		out = out[n:]
 
 		// Apply the permutation if we've squeezed the sponge dry.
-		if d.position == d.rate {
+		if len(d.buf) == 0 {
 			d.permute()
 		}
 	}
-	return len(out), err
+
+	return
 }
 
 // Sum applies padding to the hash state and then squeezes out the desired
@@ -221,32 +219,8 @@ func (d *state) Read(out []byte) (n int, err error) {
 func (d *state) Sum(in []byte) []byte {
 	// Make a copy of the original hash so that caller can keep writing
 	// and summing.
-	dup := *d
-	hash := make([]byte, dup.outputSize)
+	dup := d.clone()
+	hash := make([]byte, dup.outputLen)
 	dup.Read(hash)
 	return append(in, hash...)
-}
-
-// NewKeccakHash creates a new Keccak-based ShakeHash with
-// 8 <= rate <= maxrate && (rate % 8) == 0. Note that the resulting
-// function is *not* a SHAKE function, unless rate is 168 or 136,
-// and dsbyte == 0x1f.
-//
-// Please understand the sponge construction before using this
-// function. You almost certainly should be using something else.
-//
-// (The security strength, in bytes, is equal to (200 - rate) / 2.)
-//
-func NewKeccakHash(rate int, dsbyte byte) (ShakeHash, error) {
-	switch {
-	case rate > MaxKeccakHashRate || rate < 8:
-		return nil, errors.New("Rate must be greater than or equal to 8 and less than MaxKeccakHashRate.")
-	case (rate % 8) != 0:
-		return nil, errors.New("Rate must be equal to 0 mod 8")
-	}
-	return &state{
-		outputSize: int(rate - 1),
-		rate:       int(rate),
-		dsbyte:     dsbyte,
-	}, nil
 }

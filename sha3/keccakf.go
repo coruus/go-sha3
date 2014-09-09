@@ -2,13 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package keccak implements the KeccakF-1600 permutation used by SHA-3.
 package sha3
-
-//
-// This is implemented in a separate file to allow for replacement by
-// an optimized implementation. For a detailed specification of Keccak,
-// refer to the Keccak team's web site: http://keccak.noekeon.org/
 
 // rc stores the round constants for use in the ι step.
 var rc = [24]uint64{
@@ -38,9 +32,9 @@ var rc = [24]uint64{
 	0x8000000080008008,
 }
 
-// F1600 applies the KeccakF-1600 permutation to a 1600b-wide
-// state represented as a slice of 25 uint64.
-func KeccakF1600(a *[25]uint64) {
+// keccakF1600 applies the Keccak permutation to a 1600b-wide
+// state represented as a slice of 25 uint64s.
+func keccakF1600(a *[25]uint64) {
 	var t, bc0, bc1, bc2, bc3, bc4 uint64
 	for _, roundConstant := range rc {
 		// θ step

@@ -28,10 +28,10 @@ const (
 
 // Internal-use instances of SHAKE used to test against KATs.
 func newHashShake128() hash.Hash {
-	return &state{rate: 168, dsbyte: 0x1f, outputSize: 512}
+	return &state{rate: 168, dsbyte: 0x1f, outputLen: 512}
 }
 func newHashShake256() hash.Hash {
-	return &state{rate: 136, dsbyte: 0x1f, outputSize: 512}
+	return &state{rate: 136, dsbyte: 0x1f, outputLen: 512}
 }
 
 // testDigests contains functions returning hash.Hash instances
@@ -46,7 +46,8 @@ var testDigests = map[string]func() hash.Hash{
 	"SHAKE256": newHashShake256,
 }
 
-// testShakes contains
+// testShakes contains functions returning ShakeHash instances for
+// testing the ShakeHash-specific interface.
 var testShakes = map[string]func() ShakeHash{
 	"SHAKE128": NewShake128,
 	"SHAKE256": NewShake256,
@@ -61,7 +62,7 @@ func decodeHex(s string) []byte {
 	return b
 }
 
-// structs used to marshal JSON test-cases
+// structs used to marshal JSON test-cases.
 type KeccakKats struct {
 	Kats map[string][]struct {
 		Digest  string `json:"digest"`
@@ -125,7 +126,9 @@ func TestUnalignedWrite(t *testing.T) {
 			// Because 137 is prime this sequence should exercise all corner cases.
 			offsets := [17]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1}
 			for _, j := range offsets {
-				j = minInt(j, len(buf)-i)
+				if v := len(buf) - i; v < j {
+					j = v
+				}
 				d.Write(buf[i : i+j])
 				i += j
 			}
@@ -214,7 +217,7 @@ func BenchmarkPermutationFunction(b *testing.B) {
 	b.SetBytes(int64(200))
 	var lanes [25]uint64
 	for i := 0; i < b.N; i++ {
-		KeccakF1600(&lanes)
+		keccakF1600(&lanes)
 	}
 }
 

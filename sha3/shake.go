@@ -15,16 +15,24 @@ import (
 // ShakeHash defines the interface to hash functions that
 // support arbitrary-length output.
 type ShakeHash interface {
-	// Write absorbs more data into the hash's state.
-	// It never returns an error.
+	// Write absorbs more data into the hash's state. It panics if input is
+	// written to it after output has been read from it.
 	io.Writer
+
 	// Read reads more output from the hash; reading affects the hash's
 	// state. (ShakeHash.Read is thus very different from Hash.Sum)
 	// It never returns an error.
 	io.Reader
 
+	// Clone returns a copy of the ShakeHash in its current state.
+	Clone() ShakeHash
+
 	// Reset resets the ShakeHash to its initial state.
 	Reset()
+}
+
+func (d *state) Clone() ShakeHash {
+	return d.clone()
 }
 
 // NewShake128 creates a new SHAKE128 variable-output-length ShakeHash.
