@@ -30,18 +30,18 @@ type state struct {
 	buf  []byte     // points into storage
 	rate int        // the number of bytes of state to use
 
-	// dsbyte contains the "domain separator" and the first bit of the padding.
+	// dsbyte contains the "domain separation" value and the first bit of
+	// the padding. In sections 6.1 and 6.2 of [1], the SHA-3 and SHAKE
+	// functions are defined with bits appended to the message: SHA-3
+	// functions have 01 and SHAKE functions have 1111. Because of the way
+	// that bits are numbered from the LSB upwards, that ends up as
+	// 00000010b and 00001111b, respectively. Then the padding rule from
+	// section 5.1 is applied to pad to a multiple of the rate, which
+	// involves adding a 1 bit, zero or more zero bits and then a final one
+	// bit. The first one bit from the padding is merged into the dsbyte
+	// value giving 00000110b (0x06) and 00011111b (0x1f), respectively.
 	//
-	// In sections 6.1 and 6.2 of [1], SHA-3 and SHAKE are defined with bits
-	// appended to the message: "01" for SHA-3 and "1111" for SHAKE. Because
-	// [1] numbers bits from the LSB, this results in 00000010b and 00001111b,
-	// respectively. Then the padding rule of section 5.1 is applied to pad the
-	// message to a multiple of the rate, which involves adding a "1" bit, zero
-	// or more "0" bits and then a final "1" bit. The first "set" bit from the
-	// padding is included in the value of dsbyte, giving 00000110b (0x06) and
-	// 00011111b (0x1f), respectively.
-	//
-	// [1] http://csrc.nist.gov/publications/drafts/fips-202/fips_202_draft.pdf
+	// [1] http://csrc.nist.gov/publications/drafts/fips-202/fips_202_draft.pdf,
 	dsbyte  byte
 	storage [maxRate]byte
 
@@ -119,7 +119,7 @@ func (d *state) permute() {
 		d.buf = d.storage[:0]
 		keccakF1600(&d.a)
 	case spongeSqueezing:
-		// If we're squeezing, we need to apply the permutation before
+		// If we're squeezing, we need to apply the permutatin before
 		// copying more output.
 		keccakF1600(&d.a)
 		d.buf = d.storage[:d.rate]
@@ -147,7 +147,7 @@ func (d *state) padAndPermute(dsbyte byte) {
 	// bits are numbered from the LSB upwards, the final bit is the MSB of
 	// the last byte.
 	d.buf[d.rate-1] ^= 0x80
-	// Apply the permutation.
+	// Apply the permutation
 	d.permute()
 	d.state = spongeSqueezing
 	d.buf = d.storage[:d.rate]

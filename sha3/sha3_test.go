@@ -238,33 +238,12 @@ func benchmarkBulkHash(b *testing.B, h hash.Hash, size int) {
 	h.Reset()
 }
 
-// benchmarkHash tests the speed to hash a buffer of buflen.
-func benchmarkHash(b *testing.B, h hash.Hash, size, num int) {
-	b.StopTimer()
-	h.Reset()
-	data := sequentialBytes(size)
-	b.SetBytes(int64(size * num))
-	b.StartTimer()
+func BenchmarkSha3_512_MTU(b *testing.B) { benchmarkBulkHash(b, New512(), 1350) }
+func BenchmarkSha3_384_MTU(b *testing.B) { benchmarkBulkHash(b, New384(), 1350) }
+func BenchmarkSha3_256_MTU(b *testing.B) { benchmarkBulkHash(b, New256(), 1350) }
+func BenchmarkSha3_224_MTU(b *testing.B) { benchmarkBulkHash(b, New224(), 1350) }
+func BenchmarkShake256_MTU(b *testing.B) { benchmarkBulkHash(b, newHashShake256(), 1350) }
+func BenchmarkShake128_MTU(b *testing.B) { benchmarkBulkHash(b, newHashShake128(), 1350) }
 
-	var state []byte
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < num; j++ {
-			h.Write(data)
-		}
-		state = h.Sum(state[:0])
-	}
-	b.StopTimer()
-	h.Reset()
-}
-
-//func BenchmarkSha3_512_MTU(b *testing.B) { benchmarkBulkHash(b, New512(), 1350) }
-//func BenchmarkSha3_384_MTU(b *testing.B) { benchmarkBulkHash(b, New384(), 1350) }
-//func BenchmarkSha3_256_MTU(b *testing.B) { benchmarkBulkHash(b, New256(), 1350) }
-//func BenchmarkSha3_224_MTU(b *testing.B) { benchmarkBulkHash(b, New224(), 1350) }
-//func BenchmarkShake128_MTU(b *testing.B) { benchmarkBulkHash(b, newHashShake128(), 1350) }
-//
-//func BenchmarkSha3_512_1MiB(b *testing.B) { benchmarkBulkHash(b, New512(), 1<<20) }
-
-func BenchmarkShake256_MTU(b *testing.B)  { benchmarkBulkHash(b, newHashShake256(), 1350) }
-func BenchmarkShake256_128(b *testing.B)  { benchmarkHash(b, newHashShake256(), 1024, 1000) }
+func BenchmarkSha3_512_1MiB(b *testing.B) { benchmarkBulkHash(b, New512(), 1<<20) }
 func BenchmarkShake256_1MiB(b *testing.B) { benchmarkBulkHash(b, newHashShake256(), 1<<20) }
