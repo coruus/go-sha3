@@ -3,6 +3,7 @@
 package a6
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"errors"
@@ -12,11 +13,10 @@ import (
 	"code.google.com/p/go.crypto/sha3"
 )
 
-type A6 interface {
+type Aead interface {
 	Overhead() int
 
 	AuthEnc(plaintext, data []byte) []byte
-
 	AuthDec(ciphertext, data []byte) ([]byte, error)
 }
 
@@ -51,9 +51,17 @@ func (s *state) AuthEnc(plaintext, data []byte) []byte {
 	sp.Write(data)
 	iv := make([]byte, 24)
 	sp.Read(iv)
+
+	buf := bytes.NewBuffer(nonce)
+	buf.Write(data)
 	ciphertext := make([]byte, len(plaintext))
-	salsa20.XORKeyStream(ciphertext,
-		plaintext, iv, &s.cipherKey)
+	salsa20.XORKeyStream(ciphertext, plaintext, iv, &s.cipherKey)
+
+	sp = sha3.NewShake256()
+	sp.Write(s.hashKey[:])
+	sp.Write(nonce)
+	sp.Write(data)
+
 	sp.Write(ciphertext)
 	tag := make([]byte, tagLen)
 	sp.Read(tag)
@@ -61,34 +69,39 @@ func (s *state) AuthEnc(plaintext, data []byte) []byte {
 	return append(nonce, ciphertext...)
 }
 
-func (s *state) AuthDec(ciphertext, data []byte) ([]byte, error) {
-	nonce := ciphertext[:nonceLen]
-	ciphertext = ciphertext[nonceLen:]
-	purportedTag := ciphertext[:tagLen]
-	ciphertext = ciphertext[tagLen:]
+func (s *state) AuthDec(c, data []byte) ([]byte, error) {
+	n, c := c[:nonceLen], c[nonceLen:]
+	t, c := c[:tagLen], c[tagLen:]
+
 	sp := sha3.NewShake256()
 	sp.Write(s.hashKey[:])
-	sp.Write(nonce)
+	sp.Write(n)
 	sp.Write(data)
+
 	iv := make([]byte, 24)
 	sp.Read(iv)
-	sp.Write(ciphertext)
+
+	sp = sha3.NewShake256()
+	sp.Write(s.hashKey[:])
+	sp.Write(n)
+	sp.Write(data)
+	sp.Write(c)
 	tag := make([]byte, tagLen)
 	sp.Read(tag)
-	if subtle.ConstantTimeCompare(purportedTag, tag) != 1 {
-		return nil, errors.New(fmt.Sprintf("purported: %v, tag: %v", purportedTag, tag))
+	if subtle.ConstantTimeCompare(t, tag) != 1 {
+		return nil, errors.New(fmt.Sprintf("purported: %v, tag: %v", t, tag))
 	}
-	plaintext := make([]byte, len(ciphertext))
-	salsa20.XORKeyStream(plaintext, ciphertext, iv, &s.cipherKey)
+	plaintext := make([]byte, len(c))
+	salsa20.XORKeyStream(plaintext, c, iv, &s.cipherKey)
 	return plaintext, nil
 }
 
-func NewA6(key []byte, nonce []byte) A6 {
+func New(key []byte, nonce []byte) Aead {
 	var s state
 	sp := sha3.NewShake256()
-	sp.Read(key)
-	sp.Read(nonce)
-	sp.Write(s.hashKey[:])
-	sp.Write(s.cipherKey[:])
+	sp.Write(key)
+	sp.Write(nonce)
+	sp.Read(s.hashKey[:])
+	sp.Read(s.cipherKey[:])
 	return &s
 }

@@ -12,7 +12,7 @@ var (
 )
 
 func TestA6(t *testing.T) {
-	ae := a6.NewA6([]byte("test key"), []byte("test nonce"))
+	ae := a6.New([]byte("test key"), []byte("test nonce"))
 	c := ae.AuthEnc(testBytes, testData)
 	t.Logf("len(c) = %d\n", len(c))
 	p, err := ae.AuthDec(c, testData)
