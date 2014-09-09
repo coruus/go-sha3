@@ -7,8 +7,6 @@ package sha3
 import (
 	"encoding/binary"
 	"errors"
-
-	"code.google.com/p/go.crypto/sha3/keccak"
 )
 
 const (
@@ -39,7 +37,7 @@ type state struct {
 	position     int             // position in the input buffer
 	rate         int             // the number of bytes of state to use
 
-	// Specific to multi-bitrate padding.
+	// Specific to multi-bitrate padding
 	dsbyte byte // the domain separator byte
 
 	// Specific to SHA-3 and SHAKE
@@ -120,9 +118,9 @@ func (d *state) permute() {
 	switch d.state {
 	case spongeAbsorbing:
 		d.xorBytesIn(d.inputBuffer[:])
-		keccak.F1600(&d.a)
+		KeccakF1600(&d.a)
 	case spongeSqueezing:
-		keccak.F1600(&d.a)
+		KeccakF1600(&d.a)
 		d.copyBytesOut(d.outputBuffer[:])
 	}
 	d.position = 0
@@ -164,7 +162,7 @@ func (d *state) Write(p []byte) (written int, err error) {
 			// The fast path; absorb a full rate of input and apply the permutation.
 			// (willWrite == d.rate) <==> (d.position == 0) ==> (d.inputBufer[:] == 0)
 			d.xorBytesIn(p[written : written+willWrite])
-			keccak.F1600(&d.a)
+			KeccakF1600(&d.a)
 		} else {
 			// The slow path; buffer the input until we can fill the sponge,
 			// and then xor it in.
@@ -227,24 +225,6 @@ func (d *state) Sum(in []byte) []byte {
 	hash := make([]byte, dup.outputSize)
 	dup.Read(hash)
 	return append(in, hash...)
-}
-
-// Barrier overwrites "capacity" bytes of the sponge's state with zeros.
-// This makes it (computationally) infeasible to apply the inverse
-// permutation to recover previous inputs to the sponge.
-func (d *state) Barrier() {
-	switch d.state {
-	case spongeAbsorbing:
-		// If we're still absorbing, pad and apply the permutation.
-		d.padAndPermute(d.dsbyte)
-	}
-	// Capacity is equal to 200 - rate (in bytes)
-	for i := 0; i < ((200 - d.rate) / 8); i++ {
-		// d.a is a uint64 array, thus we clear capacity/8 lanes
-		d.a[i] = 0
-	}
-	d.zeroBuffers()
-	d.permute()
 }
 
 // NewKeccakHash creates a new Keccak-based ShakeHash with

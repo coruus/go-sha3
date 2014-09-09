@@ -12,32 +12,27 @@ import (
 	"io"
 )
 
-// Shake defines the interface to hash functions that
+// ShakeHash defines the interface to hash functions that
 // support arbitrary-length output.
 type ShakeHash interface {
 	// Write absorbs more data into the hash's state.
 	// It never returns an error.
 	io.Writer
 	// Read reads more output from the hash; reading affects the hash's
-	// state. (Shake.Read is thus very different from Hash.Sum)
+	// state. (ShakeHash.Read is thus very different from Hash.Sum)
 	// It never returns an error.
 	io.Reader
 
-	// Barrier overwrites (200 - rate) bytes of the hash's state
-	// with zeros, making it computationally infeasible to recover
-	// previous inputs.
-	Barrier()
-
-	// Reset resets the Hash to its initial state.
+	// Reset resets the ShakeHash to its initial state.
 	Reset()
 }
 
-// NewShake128 creates a new SHAKE128 variable-output-length Sponge.
+// NewShake128 creates a new SHAKE128 variable-output-length ShakeHash.
 // Its generic security strength is 128 bits against all attacks if at
 // least 32 bytes of its output are used.
 func NewShake128() ShakeHash { return &state{rate: 168, dsbyte: 0x1f} }
 
-// NewShake256 creates a new SHAKE128 variable-output-length Sponge.
+// NewShake256 creates a new SHAKE128 variable-output-length ShakeHash.
 // Its generic security strength is 256 bits against all attacks if
 // at least 64 bytes of its output are used.
 func NewShake256() ShakeHash { return &state{rate: 136, dsbyte: 0x1f} }

@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package keccak implements the KeccakF-1600 permutation used by SHA-3.
-package keccak
+package sha3
 
 //
 // This is implemented in a separate file to allow for replacement by
@@ -40,7 +40,7 @@ var rc = [24]uint64{
 
 // F1600 applies the KeccakF-1600 permutation to a 1600b-wide
 // state represented as a slice of 25 uint64.
-func F1600(a *[25]uint64) {
+func KeccakF1600(a *[25]uint64) {
 	var t, bc0, bc1, bc2, bc3, bc4 uint64
 	for _, roundConstant := range rc {
 		// θ step
