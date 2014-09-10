@@ -7,8 +7,8 @@ package sha3
 // Tests include all the ShortMsgKATs provided by the Keccak team at
 // https://github.com/gvanas/KeccakCodePackage
 //
-// They only include the zero-bit case of the utterly useless bitwise
-// testvectors published by NIST in the draft of FIPS-202.
+// They only include the zero-bit case of the bitwise testvectors
+// published by NIST in the draft of FIPS-202.
 
 import (
 	"bytes"
@@ -46,14 +46,14 @@ var testDigests = map[string]func() hash.Hash{
 	"SHAKE256": newHashShake256,
 }
 
-// testShakes contains functions returning ShakeHash instances for
+// testShakes contains functions that return ShakeHash instances for
 // testing the ShakeHash-specific interface.
 var testShakes = map[string]func() ShakeHash{
 	"SHAKE128": NewShake128,
 	"SHAKE256": NewShake256,
 }
 
-// decodeHex converts an hex-encoded string into a raw byte string.
+// decodeHex converts a hex-encoded string into a raw byte string.
 func decodeHex(s string) []byte {
 	b, err := hex.DecodeString(s)
 	if err != nil {
@@ -100,10 +100,9 @@ func TestKeccakKats(t *testing.T) {
 			}
 			d.Write(in[:kat.Length/8])
 			got := strings.ToUpper(hex.EncodeToString(d.Sum(nil)))
-			want := kat.Digest
-			if got != want {
+			if got != kat.Digest {
 				t.Errorf("function=%s, length=%d\nmessage:\n  %s\ngot:\n  %s\nwanted:\n %s",
-					functionName, kat.Length, kat.Message, got, want)
+					functionName, kat.Length, kat.Message, got, kat.Digest)
 				t.Logf("wanted %+v", kat)
 				t.FailNow()
 			}
@@ -194,14 +193,6 @@ func TestSqueezing(t *testing.T) {
 	}
 }
 
-func TestReadSimulation(t *testing.T) {
-	d := NewShake256()
-	d.Write(nil)
-	dwr := make([]byte, 32)
-	d.Read(dwr)
-
-}
-
 // sequentialBytes produces a buffer of size consecutive bytes 0x00, 0x01, ..., used for testing.
 func sequentialBytes(size int) []byte {
 	result := make([]byte, size)
@@ -221,24 +212,7 @@ func BenchmarkPermutationFunction(b *testing.B) {
 	}
 }
 
-// benchmarkBulkHash tests the speed to hash a buffer of buflen.
-func benchmarkBulkHash(b *testing.B, h hash.Hash, size int) {
-	b.StopTimer()
-	h.Reset()
-	data := sequentialBytes(size)
-	b.SetBytes(int64(size))
-	b.StartTimer()
-
-	var state []byte
-	for i := 0; i < b.N; i++ {
-		h.Write(data)
-		state = h.Sum(state[:0])
-	}
-	b.StopTimer()
-	h.Reset()
-}
-
-// benchmarkHash tests the speed to hash a buffer of buflen.
+// benchmarkHash tests the speed to hash num buffers of buflen each.
 func benchmarkHash(b *testing.B, h hash.Hash, size, num int) {
 	b.StopTimer()
 	h.Reset()
@@ -257,14 +231,34 @@ func benchmarkHash(b *testing.B, h hash.Hash, size, num int) {
 	h.Reset()
 }
 
-//func BenchmarkSha3_512_MTU(b *testing.B) { benchmarkBulkHash(b, New512(), 1350) }
-//func BenchmarkSha3_384_MTU(b *testing.B) { benchmarkBulkHash(b, New384(), 1350) }
-//func BenchmarkSha3_256_MTU(b *testing.B) { benchmarkBulkHash(b, New256(), 1350) }
-//func BenchmarkSha3_224_MTU(b *testing.B) { benchmarkBulkHash(b, New224(), 1350) }
-//func BenchmarkShake128_MTU(b *testing.B) { benchmarkBulkHash(b, newHashShake128(), 1350) }
-//
-//func BenchmarkSha3_512_1MiB(b *testing.B) { benchmarkBulkHash(b, New512(), 1<<20) }
+// benchmarkShake is specialized to the Shake instances, which don't
+// require a copy on reading output.
+func benchmarkShake(b *testing.B, h ShakeHash, size, num int) {
+	b.StopTimer()
+	h.Reset()
+	data := sequentialBytes(size)
+	b.SetBytes(int64(size * num))
+	b.StartTimer()
 
-func BenchmarkShake256_MTU(b *testing.B)  { benchmarkBulkHash(b, newHashShake256(), 1350) }
-func BenchmarkShake256_128(b *testing.B)  { benchmarkHash(b, newHashShake256(), 1024, 1000) }
-func BenchmarkShake256_1MiB(b *testing.B) { benchmarkBulkHash(b, newHashShake256(), 1<<20) }
+	d := make([]byte, 32)
+	for i := 0; i < b.N; i++ {
+		h.Reset()
+		for j := 0; j < num; j++ {
+			h.Write(data)
+		}
+		h.Read(d)
+	}
+	b.StopTimer()
+}
+
+func BenchmarkSha3_512_MTU(b *testing.B) { benchmarkHash(b, New512(), 1350, 1) }
+func BenchmarkSha3_384_MTU(b *testing.B) { benchmarkHash(b, New384(), 1350, 1) }
+func BenchmarkSha3_256_MTU(b *testing.B) { benchmarkHash(b, New256(), 1350, 1) }
+func BenchmarkSha3_224_MTU(b *testing.B) { benchmarkHash(b, New224(), 1350, 1) }
+
+func BenchmarkShake128_MTU(b *testing.B)  { benchmarkShake(b, NewShake128(), 1350, 1) }
+func BenchmarkShake256_MTU(b *testing.B)  { benchmarkShake(b, NewShake256(), 1350, 1) }
+func BenchmarkShake256_16x(b *testing.B)  { benchmarkShake(b, NewShake256(), 16, 1024) }
+func BenchmarkShake256_1MiB(b *testing.B) { benchmarkShake(b, NewShake256(), 1024, 1024) }
+
+func BenchmarkSha3_512_1MiB(b *testing.B) { benchmarkHash(b, New512(), 1024, 1024) }
