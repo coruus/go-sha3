@@ -117,11 +117,11 @@ func (d *state) permute() {
 		// before applying the permutation.
 		d.xorIn(d.buf)
 		d.buf = d.storage[:0]
-		keccakF1600(&d.a)
+		KeccakF1600(&d.a)
 	case spongeSqueezing:
 		// If we're squeezing, we need to apply the permutation before
 		// copying more output.
-		keccakF1600(&d.a)
+		KeccakF1600(&d.a)
 		d.buf = d.storage[:d.rate]
 		d.copyOut(d.buf)
 	}
@@ -170,7 +170,7 @@ func (d *state) Write(p []byte) (written int, err error) {
 			// The fast path; absorb a full "rate" bytes of input and apply the permutation.
 			d.xorIn(p[:d.rate])
 			p = p[d.rate:]
-			keccakF1600(&d.a)
+			KeccakF1600(&d.a)
 		} else {
 			// The slow path; buffer the input until we can fill the sponge, and then xor it in.
 			todo := d.rate - len(d.buf)

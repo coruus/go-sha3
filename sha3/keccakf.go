@@ -34,7 +34,7 @@ var rc = [24]uint64{
 
 // keccakF1600 applies the Keccak permutation to a 1600b-wide
 // state represented as a slice of 25 uint64s.
-func keccakF1600(a *[25]uint64) {
+func KeccakF1600(a *[25]uint64) {
 	var t, bc0, bc1, bc2, bc3, bc4 uint64
 	for _, roundConstant := range rc {
 		// θ step
