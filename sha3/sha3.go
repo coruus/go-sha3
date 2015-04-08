@@ -29,12 +29,21 @@ type state struct {
 	// dsbyte contains the "domain separation" bits and the first bit of
 	// the padding. Sections 6.1 and 6.2 of [1] separate the outputs of the
 	// SHA-3 and SHAKE functions by appending bitstrings to the message.
-	// Using a little-endian bit-ordering convention, these are "01" for SHA-3
-	// and "1111" for SHAKE, or 00000010b and 00001111b, respectively. Then the
-	// padding rule from section 5.1 is applied to pad the message to a multiple
-	// of the rate, which involves adding a "1" bit, zero or more "0" bits, and
-	// a final "1" bit. We merge the first "1" bit from the padding into dsbyte,
-	// giving 00000110b (0x06) and 00011111b (0x1f).
+	//
+	// Using a little-endian bit-ordering convention, these are
+	//      "01" for SHA-3 and
+	//    "1111" for SHAKE,
+	// or, respectively,
+	//    00000010b for SHA-3 and
+	//    00001111b for SHAKE.
+	//
+	// Then the padding rule from section 5.1 is applied to pad the message
+	// to a multiple of the rate. This involves adding a "1" bit, zero or
+	// more "0" bits, and a final "1" bit. We merge the first "1" bit from
+	// the padding into dsbyte, giving
+	//   00000110b (0x06) and
+	//   00011111b (0x1f).
+	//
 	// [1] http://csrc.nist.gov/publications/drafts/fips-202/fips_202_draft.pdf
 	//     "Draft FIPS 202: SHA-3 Standard: Permutation-Based Hash and
 	//      Extendable-Output Functions (May 2014)"
@@ -94,7 +103,7 @@ func (d *state) permute() {
 	}
 }
 
-// pads appends the domain separation bits in dsbyte, applies
+// padAndPermute appends the domain separation bits in dsbyte, applies
 // the multi-bitrate 10..1 padding rule, and permutes the state.
 func (d *state) padAndPermute(dsbyte byte) {
 	if d.buf == nil {
@@ -119,6 +128,25 @@ func (d *state) padAndPermute(dsbyte byte) {
 	d.state = spongeSqueezing
 	d.buf = d.storage[:d.rate]
 	copyOut(d, d.buf)
+}
+
+// Pad xors in dsbyte, applies the permutation, but leaves the sponge
+// in "absorbing" mode.
+func (d *state) Pad(dsbyte byte) {
+	d.padAndPermute(dsbyte)
+	d.state = spongeAbsorbing
+	d.buf = d.storage[:0]
+}
+
+// Applies the permutation, then overwrites n bytes with zeros,
+// applying the permutation as necessary.
+func (d *state) Forget(n int) {
+	d.buf = d.storage[:0]
+	for i := range d.storage {
+		d.storage[i] = 0
+	}
+	keccakF1600(&d.a)
+
 }
 
 // Write absorbs more data into the hash's state. It produces an error

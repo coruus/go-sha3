@@ -9,6 +9,7 @@ package sha3
 // functions for hashing bytes to arbitrary-length output.
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -23,6 +24,9 @@ type ShakeHash interface {
 	// state. (ShakeHash.Read is thus very different from Hash.Sum)
 	// It never returns an error.
 	io.Reader
+
+	// Pad applies MBR padding.
+	Pad(ds byte)
 
 	// Clone returns a copy of the ShakeHash in its current state.
 	Clone() ShakeHash
@@ -50,6 +54,7 @@ func ShakeSum128(hash, data []byte) {
 	h := NewShake128()
 	h.Write(data)
 	h.Read(hash)
+	h.Reset()
 }
 
 // ShakeSum256 writes an arbitrary-length digest of data into hash.
@@ -57,4 +62,14 @@ func ShakeSum256(hash, data []byte) {
 	h := NewShake256()
 	h.Write(data)
 	h.Read(hash)
+	h.Reset()
+}
+
+func NewShake(rate int) (h ShakeHash, err error) {
+	if 1 > rate || rate > 199 {
+		err = fmt.Errorf("rate is %d for a 200-byte permutation")
+		return
+	}
+	h = &state{rate: rate, dsbyte: 0x1f}
+	return
 }
