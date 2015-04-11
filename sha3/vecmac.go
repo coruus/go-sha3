@@ -5,6 +5,11 @@ type mac struct {
 	a [25]uint64
 }
 
+type VecMac interface {
+	VecMac([]byte, [][]byte) error
+	ResetMac()
+}
+
 func (h *mac) ResetMac() {
 	h.s.Reset()
 	for i, v := range h.a {
@@ -30,7 +35,7 @@ func (h *mac) VecMac(hash []byte, parts [][]byte) (err error) {
 	return
 }
 
-func NewVecMac(key []byte, rate int) (m *mac, err error) {
+func NewVecMac(key []byte, rate int) (m VecMac, err error) {
 	h, err := NewShake(rate)
 	h.Write(key)
 	h.Pad(0xff)
