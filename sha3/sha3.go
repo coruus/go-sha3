@@ -154,6 +154,29 @@ func (d *state) padAndPermute(dsbyte byte) {
 	d.copyOut(d.buf)
 }
 
+func (d *state) Pad(dsbyte byte) {
+	if d.buf == nil {
+		d.buf = d.storage[:0]
+	}
+	// Pad with this instance's domain-separator bits. We know that there's
+	// at least one byte of space in d.buf because, if it were full,
+	// permute would have been called to empty it. dsbyte also contains the
+	// first one bit for the padding. See the comment in the state struct.
+	d.buf = append(d.buf, dsbyte)
+	zerosStart := len(d.buf)
+	d.buf = d.storage[:d.rate]
+	for i := zerosStart; i < d.rate; i++ {
+		d.buf[i] = 0
+	}
+	// This adds the final one bit for the padding. Because of the way that
+	// bits are numbered from the LSB upwards, the final bit is the MSB of
+	// the last byte.
+	d.buf[d.rate-1] ^= 0x80
+	// Apply the permutation.
+	d.permute()
+	d.buf = d.storage[:0]
+}
+
 // Write absorbs more data into the hash's state. It produces an error
 // if more data is written to the ShakeHash after writing
 func (d *state) Write(p []byte) (written int, err error) {

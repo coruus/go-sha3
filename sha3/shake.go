@@ -7,8 +7,8 @@ package sha3
 // This file defines the ShakeHash interface, and provides
 // functions for creating SHAKE instances, as well as utility
 // functions for hashing bytes to arbitrary-length output.
-
 import (
+	"fmt"
 	"io"
 )
 
@@ -23,6 +23,10 @@ type ShakeHash interface {
 	// state. (ShakeHash.Read is thus very different from Hash.Sum)
 	// It never returns an error.
 	io.Reader
+
+	// Pad pads an input with 0..1 padding and applies the permutation.
+	// It is the basis of MAC modes built on the FIPS-202 primitives.
+	Pad(dsbyte byte)
 
 	// Clone returns a copy of the ShakeHash in its current state.
 	Clone() ShakeHash
@@ -44,6 +48,16 @@ func NewShake128() ShakeHash { return &state{rate: 168, dsbyte: 0x1f} }
 // Its generic security strength is 256 bits against all attacks if
 // at least 64 bytes of its output are used.
 func NewShake256() ShakeHash { return &state{rate: 136, dsbyte: 0x1f} }
+
+func NewShake(strength int) (ShakeHash, error) {
+	if strength > 796 {
+		return fmt.Errorf("Only instances with strength <= 796, rate <= 1592 are possible.")
+	}
+	if (strength % 4) != 0 {
+		return fmt.Errorf("Only instances with rate % 8 == 0 (and thus s % 4 == 0) are implemented.")
+	}
+	return &state{rate: 200 - strength*2, dsbyte: 0x1f}
+}
 
 // ShakeSum128 writes an arbitrary-length digest of data into hash.
 func ShakeSum128(hash, data []byte) {
