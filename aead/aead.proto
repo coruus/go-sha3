@@ -1,0 +1,33 @@
+mtype uvarint
+
+len:uvarint data:[len]bytes
+
+
+
+
+message WrappedKey {
+  required bytes  pubkey = 1;
+  required bytes  key    = 2;
+}
+
+message Aead {
+  required bytes iv = 1;
+  required bytes ad = 2;
+  required bytes c  = 3;
+  required bytes t  = 4;
+}
+
+message EtsPayload {
+  repeated WrappedKey keys = 1;
+  required bytes m = 2;
+}
+
+message Encrypted {
+  required bytes iv = 1;
+  required bytes c  = 2;
+}
+
+message Ets {
+  required bytes etspayload = 1;
+  required bytes signature  = 2;
+}
